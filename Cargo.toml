@@ -19,6 +19,19 @@ fastrand = "2.0"
 walkdir = "2.5"
 unicode-width = "0.2"
 
+# System mixer volume control (native backends).
+# On Linux we use ALSA mixer; on Windows/macOS we use the platform audio APIs.
+alsa = "0.9"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.56", features = [
+	"Win32_System_Com",
+	"Win32_Media_Audio",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+coreaudio-sys = "0.2"
+
 [profile.release]
 lto = true
 codegen-units = 1

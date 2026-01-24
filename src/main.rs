@@ -29,6 +29,9 @@ use symphonia::core::{
 };
 use walkdir::WalkDir;
 
+mod volume;
+use volume::VolumeControl;
+
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
 struct Args {
@@ -77,7 +80,7 @@ struct Player {
     shuffle: bool,
 
     state: PlayState,
-    volume: f32, // 0.0..=1.5
+    volume: VolumeControl,
 
     base_pos: Duration,
     started_at: Option<Instant>,
@@ -109,7 +112,7 @@ impl Player {
             play_pos: start_index,
             shuffle: false,
             state: PlayState::Stopped,
-            volume: 1.0,
+            volume: VolumeControl::new(),
             base_pos: Duration::ZERO,
             started_at: None,
             paused_at: None,
@@ -158,11 +161,12 @@ impl Player {
         self.tracks.get(self.selected)
     }
 
-    fn set_volume(&mut self, v: f32) {
-        self.volume = v.clamp(0.0, 1.5);
-        if let Some(sink) = &self.sink {
-            sink.set_volume(self.volume);
-        }
+    fn refresh_volume(&mut self) {
+        self.volume.refresh();
+    }
+
+    fn adjust_volume(&mut self, delta: f32) {
+        self.volume.adjust(self.sink.as_ref(), delta);
     }
 
     fn play_selected(&mut self) -> Result<()> {
@@ -208,7 +212,7 @@ impl Player {
         }
 
         let sink = Sink::try_new(&self.handle).context("Failed to create audio sink")?;
-        sink.set_volume(self.volume);
+        self.volume.apply_to_sink(&sink);
 
         let meta = probe_track_meta(&track).unwrap_or_default();
         let (source, total_duration) = open_source(&track, start_pos, self.loop_current)
@@ -494,6 +498,7 @@ fn main() -> Result<()> {
     let tick_rate = Duration::from_millis(50);
 
     loop {
+        player.refresh_volume();
         terminal.draw(|f| draw_ui(f, &player, &ui))?;
 
         // Auto-advance
@@ -643,11 +648,11 @@ fn handle_key(key: KeyEvent, player: &mut Player, ui: &mut UiState) -> Result<bo
     if ui.volume_mode {
         match key.code {
             KeyCode::Up => {
-                player.set_volume(player.volume + 0.05);
+                player.adjust_volume(0.05);
                 return Ok(false);
             }
             KeyCode::Down => {
-                player.set_volume(player.volume - 0.05);
+                player.adjust_volume(-0.05);
                 return Ok(false);
             }
             KeyCode::Esc | KeyCode::Char('v') => {
@@ -723,7 +728,7 @@ fn handle_key(key: KeyEvent, player: &mut Player, ui: &mut UiState) -> Result<bo
         // Nice-to-have navigation
         KeyCode::Up => {
             if ui.volume_mode {
-                player.set_volume(player.volume + 0.05);
+                player.adjust_volume(0.05);
             } else {
                 player.select_up();
                 ui.delete_confirm = None;
@@ -731,7 +736,7 @@ fn handle_key(key: KeyEvent, player: &mut Player, ui: &mut UiState) -> Result<bo
         }
         KeyCode::Down => {
             if ui.volume_mode {
-                player.set_volume(player.volume - 0.05);
+                player.adjust_volume(-0.05);
             } else {
                 player.select_down();
                 ui.delete_confirm = None;
@@ -1016,7 +1021,7 @@ fn title_line(player: &Player, ui: &UiState) -> String {
         PlayState::Paused => "paused",
     };
 
-    let vol = format!("{:.0}%", player.volume * 100.0);
+    let vol = format!("{:.0}%", player.volume.display() * 100.0);
     let chord = if ui.volume_mode {
         " (v: volume mode)"
     } else {
@@ -1025,7 +1030,8 @@ fn title_line(player: &Player, ui: &UiState) -> String {
 
     let lp = if player.loop_current { " • Loop" } else { "" };
     let sh = if player.shuffle { " • Shuffle" } else { "" };
-    format!("State: {state} • Volume: {vol}{chord}{lp}{sh}")
+    let backend = player.volume.label();
+    format!("State: {state} • Volume: {vol} [{backend}]{chord}{lp}{sh}")
 }
 
 fn now_playing_lines(player: &Player, _ui: &UiState) -> Vec<Line<'static>> {
@@ -1133,10 +1139,15 @@ fn hints_lines(player: &Player, ui: &UiState) -> Vec<Line<'static>> {
     }
 
     if ui.volume_mode {
+        let what = if player.volume.is_system() {
+            "system volume"
+        } else {
+            "volume"
+        };
         return vec![Line::from(vec![
             Span::raw("Volume mode: "),
             Span::styled("↑/↓", key),
-            Span::raw(" change volume • "),
+            Span::raw(format!(" change {what} • ")),
             Span::styled("v", key),
             Span::raw("/"),
             Span::styled("Esc", key),
