@@ -15,6 +15,7 @@ use crossterm::{
 };
 use ratatui::{
     prelude::*,
+    text::Text,
     widgets::block::Title,
     widgets::{Block, BorderType, Borders, Clear, Gauge, List, ListItem, Paragraph, Wrap},
 };
@@ -460,8 +461,6 @@ struct UiState {
     search_query: String,
     delete_confirm: Option<DeleteConfirm>,
     last_tick: Instant,
-    last_anim: Instant,
-    spinner_i: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -490,8 +489,6 @@ fn main() -> Result<()> {
         search_query: String::new(),
         delete_confirm: None,
         last_tick: Instant::now(),
-        last_anim: Instant::now(),
-        spinner_i: 0,
     };
 
     let tick_rate = Duration::from_millis(50);
@@ -518,12 +515,6 @@ fn main() -> Result<()> {
 
         if ui.last_tick.elapsed() >= tick_rate {
             ui.last_tick = Instant::now();
-        }
-
-        // Slow animation: update separately from tick rate.
-        if ui.last_anim.elapsed() >= Duration::from_millis(400) {
-            ui.last_anim = Instant::now();
-            ui.spinner_i = ui.spinner_i.wrapping_add(1);
         }
     }
 
@@ -864,9 +855,24 @@ fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState) {
         .iter()
         .enumerate()
         .map(|(i, t)| {
-            let prefix = if i == player.current { "▶ " } else { "  " };
-            let line = format!("{}{}", prefix, t.display_name);
-            ListItem::new(line)
+            let (prefix, prefix_style) = if i == player.current {
+                ("▶ ", Style::default().fg(Color::Green))
+            } else {
+                ("  ", Style::default())
+            };
+
+            let name_style = if i == player.current {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
+            ListItem::new(Line::from(vec![
+                Span::styled(prefix, prefix_style),
+                Span::styled(t.display_name.clone(), name_style),
+            ]))
         })
         .collect();
 
@@ -878,7 +884,13 @@ fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .title("Library"),
+                .border_style(Style::default().fg(Color::Yellow))
+                .title(Title::from(Line::styled(
+                    "Library",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ))),
         )
         .highlight_style(
             Style::default()
@@ -913,7 +925,13 @@ fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .title("Search"),
+                .border_style(Style::default().fg(Color::Magenta))
+                .title(Title::from(Line::styled(
+                    "Search",
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
+                ))),
         )
         .wrap(Wrap { trim: true });
 
@@ -929,13 +947,21 @@ fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState) {
         ])
         .split(mid[1]);
 
-    let now_playing = now_playing_text(player, ui);
-    let now_widget = Paragraph::new(now_playing).wrap(Wrap { trim: true }).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .title("Now"),
-    );
+    let now_playing = now_playing_lines(player, ui);
+    let now_widget = Paragraph::new(Text::from(now_playing))
+        .wrap(Wrap { trim: true })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(Color::Cyan))
+                .title(Title::from(Line::styled(
+                    "Now",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ))),
+        );
     f.render_widget(now_widget, right[0]);
 
     let (ratio, label) = progress(player);
@@ -944,7 +970,13 @@ fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .title("Progress"),
+                .border_style(Style::default().fg(Color::Green))
+                .title(Title::from(Line::styled(
+                    "Progress",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ))),
         )
         .gauge_style(
             Style::default()
@@ -955,15 +987,20 @@ fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState) {
         .label(label);
     f.render_widget(gauge, right[1]);
 
-    let hints = hints_text(player, ui);
-    let help_widget = Paragraph::new(hints)
+    let hints = hints_lines(player, ui);
+    let help_widget = Paragraph::new(Text::from(hints))
         .wrap(Wrap { trim: true })
-        .style(Style::default().fg(Color::DarkGray))
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .title("Hints"),
+                .border_style(Style::default().fg(Color::Blue))
+                .title(Title::from(Line::styled(
+                    "Hints",
+                    Style::default()
+                        .fg(Color::Blue)
+                        .add_modifier(Modifier::BOLD),
+                ))),
         );
     f.render_widget(help_widget, right[2]);
 
@@ -991,13 +1028,12 @@ fn title_line(player: &Player, ui: &UiState) -> String {
     format!("State: {state} • Volume: {vol}{chord}{lp}{sh}")
 }
 
-fn now_playing_text(player: &Player, ui: &UiState) -> String {
+fn now_playing_lines(player: &Player, _ui: &UiState) -> Vec<Line<'static>> {
     let name = player
         .current_track()
         .map(|t| t.display_name.as_str())
         .unwrap_or("(no tracks)");
 
-    let spinner = spinner_text(player, ui);
     let title = player
         .now_meta
         .title
@@ -1017,25 +1053,108 @@ fn now_playing_text(player: &Player, ui: &UiState) -> String {
         .filter(|s| !s.trim().is_empty())
         .unwrap_or("-");
 
-    format!(
-        "Track: {spinner} {title}\nArtist: {artist}\nAlbum:  {album}\nIndex:  {} / {}",
-        if player.has_tracks() {
-            player.current + 1
-        } else {
-            0
-        },
-        player.tracks.len()
-    )
+    let key = key_style();
+    let title_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
+
+    vec![
+        Line::from(vec![
+            Span::styled("Track:", key),
+            Span::raw(" "),
+            Span::styled(title.to_string(), title_style),
+        ]),
+        Line::from(vec![
+            Span::styled("Artist:", key),
+            Span::raw(format!(" {artist}")),
+        ]),
+        Line::from(vec![
+            Span::styled("Album:", key),
+            Span::raw(format!("  {album}")),
+        ]),
+        Line::from(vec![
+            Span::styled("Index:", key),
+            Span::raw(format!(
+                "  {} / {}",
+                if player.has_tracks() {
+                    player.current + 1
+                } else {
+                    0
+                },
+                player.tracks.len()
+            )),
+        ]),
+    ]
 }
 
-fn spinner_text(player: &Player, ui: &UiState) -> &'static str {
-    // Requested animation: "." ".." ".." (repeat)
-    const FRAMES: [&str; 3] = [".", "..", ".."];
-    match player.state {
-        PlayState::Playing => FRAMES[ui.spinner_i % FRAMES.len()],
-        PlayState::Paused => "..",
-        PlayState::Stopped => "",
+fn key_style() -> Style {
+    Style::default()
+        .fg(Color::Magenta)
+        .add_modifier(Modifier::BOLD)
+}
+
+fn heading_style() -> Style {
+    Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD)
+}
+
+fn hints_lines(player: &Player, ui: &UiState) -> Vec<Line<'static>> {
+    let key = key_style();
+
+    if ui.search_mode {
+        return vec![Line::from(vec![
+            Span::styled("Enter", key),
+            Span::raw(" play • "),
+            Span::styled("Esc", key),
+            Span::raw(" cancel • "),
+            Span::styled("Backspace", key),
+            Span::raw(" delete"),
+        ])];
     }
+
+    if let Some(confirm) = &ui.delete_confirm {
+        if confirm.started_at.elapsed() <= Duration::from_millis(2500) {
+            let name = player
+                .tracks
+                .get(confirm.index)
+                .map(|t| t.display_name.as_str())
+                .unwrap_or("(track)");
+            return vec![Line::from(vec![
+                Span::raw("Press "),
+                Span::styled("D", key),
+                Span::raw(" again to delete: "),
+                Span::styled(name.to_string(), Style::default().fg(Color::Yellow)),
+                Span::raw(" • "),
+                Span::styled("Esc", key),
+                Span::raw(" cancel"),
+            ])];
+        }
+    }
+
+    if ui.volume_mode {
+        return vec![Line::from(vec![
+            Span::raw("Volume mode: "),
+            Span::styled("↑/↓", key),
+            Span::raw(" change volume • "),
+            Span::styled("v", key),
+            Span::raw("/"),
+            Span::styled("Esc", key),
+            Span::raw(" exit"),
+        ])];
+    }
+
+    vec![Line::from(vec![
+        Span::raw("Press "),
+        Span::styled("h", key),
+        Span::raw(" for cheatsheet • "),
+        Span::styled("v", key),
+        Span::raw(" volume mode • "),
+        Span::styled("S", key),
+        Span::raw(" search • "),
+        Span::styled("D", key),
+        Span::raw(" delete"),
+    ])]
 }
 
 fn probe_duration(path: &Path) -> Result<Duration> {
@@ -1146,31 +1265,6 @@ fn progress(player: &Player) -> (f64, String) {
     }
 }
 
-fn hints_text(player: &Player, ui: &UiState) -> String {
-    if ui.search_mode {
-        let q = ui.search_query.trim_end();
-        let shown = if q.is_empty() { "(type to search)" } else { q };
-        return format!("Search: {shown} • Enter play • Esc cancel • Backspace delete");
-    }
-
-    if let Some(confirm) = &ui.delete_confirm {
-        if confirm.started_at.elapsed() <= Duration::from_millis(2500) {
-            let name = player
-                .tracks
-                .get(confirm.index)
-                .map(|t| t.display_name.as_str())
-                .unwrap_or("(track)");
-            return format!("Press D again to delete: {name} • Esc cancel");
-        }
-    }
-
-    if ui.volume_mode {
-        "Volume mode: ↑/↓ change volume • v/Esc exit".to_string()
-    } else {
-        "Press h for cheatsheet • v volume mode • S search • D delete".to_string()
-    }
-}
-
 fn help_text(ui: &UiState) -> String {
     let vol_line = if ui.volume_mode {
         "v / Esc      exit volume mode"
@@ -1273,8 +1367,8 @@ fn draw_help_overlay(f: &mut Frame, player: &Player, ui: &UiState) {
         );
     }
 
-    let text = lines.join("\n");
-    let p = Paragraph::new(text)
+    let styled_lines: Vec<Line<'static>> = lines.into_iter().map(stylize_help_line).collect();
+    let p = Paragraph::new(Text::from(styled_lines))
         .block(block)
         .scroll((scroll, 0))
         .style(Style::default().fg(Color::White));
@@ -1353,6 +1447,56 @@ fn help_wrapped_lines(ui: &UiState, width: u16) -> Vec<String> {
     }
 
     out
+}
+
+fn stylize_help_line(line: String) -> Line<'static> {
+    if line.trim().is_empty() {
+        return Line::from(Span::raw(""));
+    }
+
+    // Section heading (no indentation)
+    if !line.starts_with(' ') {
+        return Line::from(Span::styled(line, heading_style()));
+    }
+
+    let key = key_style();
+    let indent_len = line.chars().take_while(|c| *c == ' ').count();
+    let indent = " ".repeat(indent_len);
+    let trimmed = line[indent_len..].to_string();
+
+    // Split "keys" column from description column by the first run of >= 2 spaces.
+    let mut split_at: Option<usize> = None;
+    let mut run = 0usize;
+    for (i, ch) in trimmed.char_indices() {
+        if ch == ' ' {
+            run += 1;
+            if run >= 2 {
+                split_at = Some(i + 1 - run);
+                break;
+            }
+        } else {
+            run = 0;
+        }
+    }
+
+    if let Some(at) = split_at {
+        let left = trimmed[..at].trim_end().to_string();
+        let right = trimmed[at..].trim().to_string();
+        let left_style = if left.trim_start().starts_with('(') {
+            Style::default().fg(Color::DarkGray)
+        } else {
+            key
+        };
+
+        let mut spans = vec![Span::raw(indent), Span::styled(left, left_style)];
+        if !right.is_empty() {
+            spans.push(Span::raw("  "));
+            spans.push(Span::raw(right));
+        }
+        Line::from(spans)
+    } else {
+        Line::from(vec![Span::raw(indent), Span::raw(trimmed)])
+    }
 }
 
 fn make_shuffled_order(len: usize, current: usize) -> Vec<usize> {
