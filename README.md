@@ -72,6 +72,7 @@ Playback:
 - `N` next track
 - `r` restart current track (play from start)
 - `l` loop selected/current track
+- `s` toggle shuffle order
 
 Seeking:
 
@@ -89,6 +90,8 @@ Library:
 
 - `↑/↓` select track
 - `Enter` play selected
+- `S` search (type to select; `Enter` plays; `Esc` cancels)
+- `D` delete selected track (press twice to confirm)
 
 ## Notes on seeking
 

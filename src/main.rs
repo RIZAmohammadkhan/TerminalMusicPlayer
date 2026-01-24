@@ -1,5 +1,6 @@
 use std::{
     cmp::min,
+    fs,
     fs::File,
     io::{self, BufReader},
     path::{Path, PathBuf},
@@ -14,6 +15,7 @@ use crossterm::{
 };
 use ratatui::{
     prelude::*,
+    widgets::block::Title,
     widgets::{Block, BorderType, Borders, Clear, Gauge, List, ListItem, Paragraph, Wrap},
 };
 use rodio::{OutputStream, OutputStreamHandle, Sink, Source};
@@ -345,6 +347,83 @@ impl Player {
             self.selected += 1;
         }
     }
+
+    fn delete_selected(&mut self) -> Result<()> {
+        if !self.has_tracks() {
+            return Ok(());
+        }
+
+        let idx = self.selected;
+        let path = self
+            .tracks
+            .get(idx)
+            .context("No track selected")?
+            .path
+            .clone();
+
+        let deleting_current = idx == self.current;
+        let was_playing_or_paused = matches!(self.state, PlayState::Playing | PlayState::Paused);
+
+        // Remove from disk first; if it fails, keep the entry.
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(e)
+                    .with_context(|| format!("Failed to delete file: {}", path.display()));
+            }
+        }
+
+        if deleting_current {
+            if let Some(old) = self.sink.take() {
+                old.stop();
+            }
+            self.state = PlayState::Stopped;
+            self.loop_current = false;
+            self.base_pos = Duration::ZERO;
+            self.started_at = None;
+            self.paused_at = None;
+            self.total_pause = Duration::ZERO;
+            self.total_duration = None;
+            self.now_meta = TrackMeta::default();
+        }
+
+        self.tracks.remove(idx);
+
+        if self.tracks.is_empty() {
+            self.play_order.clear();
+            self.play_pos = 0;
+            self.current = 0;
+            self.selected = 0;
+            self.shuffle = false;
+            return Ok(());
+        }
+
+        if !deleting_current {
+            if idx < self.current {
+                self.current = self.current.saturating_sub(1);
+            }
+        } else {
+            self.current = idx.min(self.tracks.len().saturating_sub(1));
+        }
+
+        self.selected = self.selected.min(self.tracks.len().saturating_sub(1));
+
+        if self.shuffle {
+            self.play_order = make_shuffled_order(self.tracks.len(), self.current);
+            self.play_pos = 0;
+        } else {
+            self.play_order = (0..self.tracks.len()).collect();
+            self.play_pos = self.current;
+        }
+
+        if deleting_current && was_playing_or_paused {
+            self.selected = self.current;
+            self.start_track(Duration::ZERO)?;
+        }
+
+        Ok(())
+    }
 }
 
 fn open_source(
@@ -356,7 +435,9 @@ fn open_source(
     let reader = BufReader::new(file);
 
     let decoder = rodio::Decoder::new(reader)?;
-    let total = decoder.total_duration().or_else(|| probe_duration(path).ok());
+    let total = decoder
+        .total_duration()
+        .or_else(|| probe_duration(path).ok());
 
     // Always call skip_duration so both branches have the same type.
     let source = decoder.skip_duration(start_pos).convert_samples();
@@ -374,9 +455,19 @@ fn open_source(
 struct UiState {
     volume_mode: bool,
     show_help: bool,
+    help_scroll: u16,
+    search_mode: bool,
+    search_query: String,
+    delete_confirm: Option<DeleteConfirm>,
     last_tick: Instant,
     last_anim: Instant,
     spinner_i: usize,
+}
+
+#[derive(Debug, Clone)]
+struct DeleteConfirm {
+    index: usize,
+    started_at: Instant,
 }
 
 fn main() -> Result<()> {
@@ -394,6 +485,10 @@ fn main() -> Result<()> {
     let mut ui = UiState {
         volume_mode: false,
         show_help: false,
+        help_scroll: 0,
+        search_mode: false,
+        search_query: String::new(),
+        delete_confirm: None,
         last_tick: Instant::now(),
         last_anim: Instant::now(),
         spinner_i: 0,
@@ -437,27 +532,118 @@ fn main() -> Result<()> {
 }
 
 fn handle_key(key: KeyEvent, player: &mut Player, ui: &mut UiState) -> Result<bool> {
-    // Quit
-    if key.code == KeyCode::Char('q') {
-        return Ok(true);
-    }
-
     // Ctrl+C quit
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
         return Ok(true);
     }
 
-    // Help overlay toggle.
-    if matches!(key.code, KeyCode::Char('h') | KeyCode::Char('?')) {
-        ui.show_help = !ui.show_help;
+    // Search mode captures all typing so it doesn't trigger other bindings.
+    if ui.search_mode {
+        match key.code {
+            KeyCode::Esc => {
+                ui.search_mode = false;
+                ui.search_query.clear();
+            }
+            KeyCode::Enter => {
+                // Confirm selection (and play) then exit search.
+                let _ = player.play_selected();
+                ui.search_mode = false;
+            }
+            KeyCode::Backspace => {
+                ui.search_query.pop();
+                apply_search_selection(player, &ui.search_query);
+            }
+            KeyCode::Char(c) => {
+                // Ignore control chords; accept everything else as input.
+                if !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT)
+                {
+                    ui.search_query.push(c);
+                    apply_search_selection(player, &ui.search_query);
+                }
+            }
+            _ => {}
+        }
+
         return Ok(false);
     }
 
-    // While help is open, keep playback running but ignore most keys.
-    if ui.show_help {
-        if key.code == KeyCode::Esc {
-            ui.show_help = false;
+    // Enter search mode.
+    if key.code == KeyCode::Char('S') {
+        ui.search_mode = true;
+        ui.search_query.clear();
+        ui.delete_confirm = None;
+        return Ok(false);
+    }
+
+    // Quit
+    if key.code == KeyCode::Char('q') {
+        return Ok(true);
+    }
+
+    // Cancel pending delete confirmation.
+    if key.code == KeyCode::Esc {
+        ui.delete_confirm = None;
+    }
+
+    // Help overlay toggle.
+    if matches!(key.code, KeyCode::Char('h') | KeyCode::Char('?')) {
+        ui.show_help = !ui.show_help;
+        if ui.show_help {
+            ui.help_scroll = 0;
         }
+        return Ok(false);
+    }
+
+    // While help is open, keep playback running; allow scrolling + close.
+    if ui.show_help {
+        // Determine current page size and scroll limits based on terminal size.
+        let (page, max_scroll) = if let Ok((cols, rows)) = terminal::size() {
+            let area = Rect {
+                x: 0,
+                y: 0,
+                width: cols,
+                height: rows,
+            };
+            let overlay = help_overlay_rect(area);
+            let inner_h = overlay.height.saturating_sub(2) as usize;
+            let inner_w = overlay.width.saturating_sub(2);
+            let lines = help_wrapped_lines(ui, inner_w);
+            let max_scroll = lines.len().saturating_sub(inner_h);
+            (
+                (inner_h.saturating_sub(1).max(1)).min(u16::MAX as usize) as u16,
+                max_scroll.min(u16::MAX as usize) as u16,
+            )
+        } else {
+            (10, 0)
+        };
+
+        match key.code {
+            KeyCode::Esc => {
+                ui.show_help = false;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                ui.help_scroll = ui.help_scroll.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                ui.help_scroll = ui.help_scroll.saturating_add(1);
+            }
+            KeyCode::PageUp => {
+                ui.help_scroll = ui.help_scroll.saturating_sub(page);
+            }
+            KeyCode::PageDown => {
+                ui.help_scroll = ui.help_scroll.saturating_add(page);
+            }
+            KeyCode::Home => {
+                ui.help_scroll = 0;
+            }
+            KeyCode::End => {
+                ui.help_scroll = max_scroll;
+            }
+            _ => {}
+        }
+
+        ui.help_scroll = ui.help_scroll.min(max_scroll);
         return Ok(false);
     }
 
@@ -514,8 +700,33 @@ fn handle_key(key: KeyEvent, player: &mut Player, ui: &mut UiState) -> Result<bo
         KeyCode::Char('l') => {
             let _ = player.toggle_loop_selected();
         }
-        KeyCode::Char('x') => {
+        KeyCode::Char('s') => {
             player.toggle_shuffle();
+        }
+        KeyCode::Char('D') => {
+            if !player.has_tracks() {
+                return Ok(false);
+            }
+
+            let ttl = Duration::from_millis(2500);
+            let idx = player.selected;
+
+            if let Some(confirm) = &ui.delete_confirm {
+                if confirm.index == idx && confirm.started_at.elapsed() <= ttl {
+                    ui.delete_confirm = None;
+                    player.delete_selected()?;
+                } else {
+                    ui.delete_confirm = Some(DeleteConfirm {
+                        index: idx,
+                        started_at: Instant::now(),
+                    });
+                }
+            } else {
+                ui.delete_confirm = Some(DeleteConfirm {
+                    index: idx,
+                    started_at: Instant::now(),
+                });
+            }
         }
 
         // Nice-to-have navigation
@@ -524,6 +735,7 @@ fn handle_key(key: KeyEvent, player: &mut Player, ui: &mut UiState) -> Result<bo
                 player.set_volume(player.volume + 0.05);
             } else {
                 player.select_up();
+                ui.delete_confirm = None;
             }
         }
         KeyCode::Down => {
@@ -531,10 +743,12 @@ fn handle_key(key: KeyEvent, player: &mut Player, ui: &mut UiState) -> Result<bo
                 player.set_volume(player.volume - 0.05);
             } else {
                 player.select_down();
+                ui.delete_confirm = None;
             }
         }
         KeyCode::Enter => {
             player.play_selected()?;
+            ui.delete_confirm = None;
         }
         KeyCode::Char(' ') => {
             player.toggle_pause();
@@ -621,7 +835,11 @@ fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState) {
 
     let title = title_line(player, ui);
     let title_widget = Paragraph::new(title)
-        .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        .style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
         .block(
             Block::default()
                 .borders(Borders::ALL)
@@ -634,6 +852,11 @@ fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
         .split(root[1]);
+
+    let left = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(3)])
+        .split(mid[0]);
 
     // Playlist
     let items: Vec<ListItem> = player
@@ -664,7 +887,37 @@ fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState) {
         )
         .highlight_symbol("» ");
 
-    f.render_stateful_widget(list, mid[0], &mut state);
+    f.render_stateful_widget(list, left[0], &mut state);
+
+    let search_text = if ui.search_mode {
+        if ui.search_query.is_empty() {
+            "Type to search…".to_string()
+        } else {
+            ui.search_query.clone()
+        }
+    } else {
+        "Press S to search".to_string()
+    };
+
+    let search_style = if ui.search_mode {
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    let search_widget = Paragraph::new(search_text)
+        .style(search_style)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title("Search"),
+        )
+        .wrap(Wrap { trim: true });
+
+    f.render_widget(search_widget, left[1]);
 
     // Now playing
     let right = Layout::default()
@@ -677,14 +930,12 @@ fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState) {
         .split(mid[1]);
 
     let now_playing = now_playing_text(player, ui);
-    let now_widget = Paragraph::new(now_playing)
-        .wrap(Wrap { trim: true })
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .title("Now"),
-        );
+    let now_widget = Paragraph::new(now_playing).wrap(Wrap { trim: true }).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title("Now"),
+    );
     f.render_widget(now_widget, right[0]);
 
     let (ratio, label) = progress(player);
@@ -695,12 +946,16 @@ fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState) {
                 .border_type(BorderType::Rounded)
                 .title("Progress"),
         )
-        .gauge_style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+        .gauge_style(
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        )
         .ratio(ratio)
         .label(label);
     f.render_widget(gauge, right[1]);
 
-    let hints = hints_text(ui);
+    let hints = hints_text(player, ui);
     let help_widget = Paragraph::new(hints)
         .wrap(Wrap { trim: true })
         .style(Style::default().fg(Color::DarkGray))
@@ -828,7 +1083,8 @@ fn probe_track_meta(path: &Path) -> Result<TrackMeta> {
             if let (Some(time_base), Some(n_frames)) = (params.time_base, params.n_frames) {
                 let Time { seconds, frac, .. } = time_base.calc_time(n_frames);
                 meta.duration = Some(Duration::from_secs(seconds) + Duration::from_secs_f64(frac));
-            } else if let (Some(sample_rate), Some(n_frames)) = (params.sample_rate, params.n_frames)
+            } else if let (Some(sample_rate), Some(n_frames)) =
+                (params.sample_rate, params.n_frames)
             {
                 let secs = n_frames as f64 / sample_rate as f64;
                 if secs.is_finite() && secs > 0.0 {
@@ -890,11 +1146,28 @@ fn progress(player: &Player) -> (f64, String) {
     }
 }
 
-fn hints_text(ui: &UiState) -> String {
+fn hints_text(player: &Player, ui: &UiState) -> String {
+    if ui.search_mode {
+        let q = ui.search_query.trim_end();
+        let shown = if q.is_empty() { "(type to search)" } else { q };
+        return format!("Search: {shown} • Enter play • Esc cancel • Backspace delete");
+    }
+
+    if let Some(confirm) = &ui.delete_confirm {
+        if confirm.started_at.elapsed() <= Duration::from_millis(2500) {
+            let name = player
+                .tracks
+                .get(confirm.index)
+                .map(|t| t.display_name.as_str())
+                .unwrap_or("(track)");
+            return format!("Press D again to delete: {name} • Esc cancel");
+        }
+    }
+
     if ui.volume_mode {
         "Volume mode: ↑/↓ change volume • v/Esc exit".to_string()
     } else {
-        "Press h for cheatsheet • v volume mode".to_string()
+        "Press h for cheatsheet • v volume mode • S search • D delete".to_string()
     }
 }
 
@@ -909,7 +1182,10 @@ fn help_text(ui: &UiState) -> String {
         "General",
         "  h or ?      toggle this help",
         "  q           quit",
-        "  x           toggle shuffle order",
+        "  s           toggle shuffle order",
+        "  S           search library (type to select)",
+        "  D           delete selected track (press twice)",
+        "  ↑/↓         scroll (PgUp/PgDn, Home/End)",
         "",
         "Playback",
         "  Space       pause/resume",
@@ -936,51 +1212,147 @@ fn help_text(ui: &UiState) -> String {
     .join("\n")
 }
 
+fn apply_search_selection(player: &mut Player, query: &str) {
+    let q = query.trim();
+    if q.is_empty() {
+        return;
+    }
+
+    let q = q.to_ascii_lowercase();
+    if let Some((idx, _)) = player
+        .tracks
+        .iter()
+        .enumerate()
+        .find(|(_, t)| t.display_name.to_ascii_lowercase().contains(&q))
+    {
+        player.selected = idx;
+    }
+}
+
 fn draw_help_overlay(f: &mut Frame, player: &Player, ui: &UiState) {
     let area = f.area();
-    let overlay = centered_rect(78, 80, area);
+    let overlay = help_overlay_rect(area);
 
     f.render_widget(Clear, overlay);
 
-    let header = if player.loop_current {
+    let inner_w = overlay.width.saturating_sub(2);
+    let lines = help_wrapped_lines(ui, inner_w);
+    let total_lines = lines.len();
+    let inner_h = overlay.height.saturating_sub(2) as usize;
+    let max_scroll = total_lines.saturating_sub(inner_h);
+    let scroll = ui.help_scroll.min(max_scroll.min(u16::MAX as usize) as u16);
+
+    let base_header = if player.loop_current {
         "Cheatsheet • Loop ON"
     } else {
         "Cheatsheet"
     };
 
-    let block = Block::default()
+    let indicator = if total_lines == 0 || inner_h == 0 {
+        String::new()
+    } else {
+        let start = (scroll as usize).saturating_add(1);
+        let visible = inner_h.max(1);
+        let end = (start.saturating_add(visible).saturating_sub(1)).min(total_lines);
+        format!("{start}-{end}/{total_lines}")
+    };
+
+    let mut block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .title(header)
+        .title(Title::from(base_header))
         .style(Style::default().fg(Color::White));
 
-    let text = help_text(ui);
+    if !indicator.is_empty() {
+        block = block.title(
+            Title::from(Line::styled(
+                indicator,
+                Style::default().fg(Color::DarkGray),
+            ))
+            .alignment(Alignment::Right),
+        );
+    }
+
+    let text = lines.join("\n");
     let p = Paragraph::new(text)
         .block(block)
-        .wrap(Wrap { trim: false })
+        .scroll((scroll, 0))
         .style(Style::default().fg(Color::White));
 
     f.render_widget(p, overlay);
 }
 
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(r);
+fn help_overlay_rect(area: Rect) -> Rect {
+    // Use almost all terminal space, with a small margin, so the cheatsheet is
+    // readable even on small terminals.
+    area.inner(Margin {
+        vertical: 1,
+        horizontal: 2,
+    })
+}
 
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(popup_layout[1])[1]
+fn help_wrapped_lines(ui: &UiState, width: u16) -> Vec<String> {
+    let raw = help_text(ui);
+    let max_width = width.max(1) as usize;
+
+    let mut out: Vec<String> = Vec::new();
+    for line in raw.lines() {
+        if line.is_empty() {
+            out.push(String::new());
+            continue;
+        }
+
+        let indent_len = line.chars().take_while(|c| *c == ' ').count();
+        let indent = " ".repeat(indent_len);
+        let content = &line[indent_len..];
+
+        // If the line already fits, keep it as-is.
+        if unicode_width::UnicodeWidthStr::width(line) <= max_width {
+            out.push(line.to_string());
+            continue;
+        }
+
+        let avail = max_width.saturating_sub(indent_len).max(1);
+        let mut current = String::new();
+        for word in content.split_whitespace() {
+            let word_w = unicode_width::UnicodeWidthStr::width(word);
+            if current.is_empty() {
+                if word_w <= avail {
+                    current.push_str(word);
+                } else {
+                    // Hard-break very long words.
+                    let mut chunk = String::new();
+                    for ch in word.chars() {
+                        let next_w = unicode_width::UnicodeWidthStr::width(chunk.as_str())
+                            + unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                        if next_w > avail && !chunk.is_empty() {
+                            out.push(format!("{indent}{chunk}"));
+                            chunk.clear();
+                        }
+                        chunk.push(ch);
+                    }
+                    if !chunk.is_empty() {
+                        current = chunk;
+                    }
+                }
+            } else {
+                let cur_w = unicode_width::UnicodeWidthStr::width(current.as_str());
+                if cur_w + 1 + word_w <= avail {
+                    current.push(' ');
+                    current.push_str(word);
+                } else {
+                    out.push(format!("{indent}{current}"));
+                    current.clear();
+                    current.push_str(word);
+                }
+            }
+        }
+        if !current.is_empty() {
+            out.push(format!("{indent}{current}"));
+        }
+    }
+
+    out
 }
 
 fn make_shuffled_order(len: usize, current: usize) -> Vec<usize> {
