@@ -3,16 +3,22 @@ compile_error!("terminal-music-player is Linux-only. Build on Linux (target_os=\
 
 use std::{
     cmp::min,
+    env,
     fs,
     fs::File,
-    io::{self, BufReader},
+    io::{self, BufReader, Write},
     path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result};
 use clap::Parser;
 use crossterm::{
+    cursor,
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     terminal,
 };
@@ -32,15 +38,19 @@ use symphonia::core::{
 };
 use walkdir::WalkDir;
 
+use signal_hook::{consts::signal::*, flag as signal_flag};
+
 mod volume;
 use volume::VolumeControl;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
 struct Args {
-    /// Directory (or file) to play. If omitted, uses current directory.
-    #[arg(value_name = "PATH", default_value = ".")]
-    path: PathBuf,
+    /// Directory (or file) to play.
+    ///
+    /// If omitted: uses XDG music dir (if configured), else ~/Music, else the current directory.
+    #[arg(value_name = "PATH")]
+    path: Option<PathBuf>,
 
     /// Start at this track index (0-based)
     #[arg(long, default_value_t = 0)]
@@ -260,6 +270,16 @@ impl Player {
         }
     }
 
+    fn stop_playback(&mut self) {
+        if let Some(old) = self.sink.take() {
+            old.stop();
+        }
+        self.state = PlayState::Stopped;
+        self.started_at = None;
+        self.paused_at = None;
+        self.total_pause = Duration::ZERO;
+    }
+
     fn is_track_finished(&self) -> bool {
         match (&self.sink, self.state) {
             (Some(sink), PlayState::Playing) => sink.empty(),
@@ -477,9 +497,20 @@ struct DeleteConfirm {
 }
 
 fn main() -> Result<()> {
+    TerminalCleanup::install_panic_hook();
+
     let args = Args::parse();
 
-    let tracks = discover_tracks(&args.path)?;
+    let library_path = args.path.unwrap_or_else(default_library_path);
+
+    // Handle SIGINT/SIGTERM/etc. so we can restore terminal state.
+    let shutdown = Arc::new(AtomicBool::new(false));
+    for sig in [SIGINT, SIGTERM, SIGHUP, SIGQUIT] {
+        signal_flag::register(sig, Arc::clone(&shutdown))
+            .with_context(|| format!("register signal handler for {sig}"))?;
+    }
+
+    let tracks = discover_tracks(&library_path)?;
     let mut player = Player::new(tracks, args.index)?;
 
     // Auto-start first track if any
@@ -488,6 +519,7 @@ fn main() -> Result<()> {
     }
 
     let mut terminal = init_terminal()?;
+    let _cleanup = TerminalCleanup;
     let mut ui = UiState {
         volume_mode: false,
         show_help: false,
@@ -501,6 +533,11 @@ fn main() -> Result<()> {
     let tick_rate = Duration::from_millis(50);
 
     loop {
+        if shutdown.load(Ordering::Relaxed) {
+            player.stop_playback();
+            break;
+        }
+
         player.refresh_volume();
         terminal.draw(|f| draw_ui(f, &player, &ui))?;
 
@@ -526,13 +563,14 @@ fn main() -> Result<()> {
         }
     }
 
-    restore_terminal(terminal)?;
+    drop(terminal);
     Ok(())
 }
 
 fn handle_key(key: KeyEvent, player: &mut Player, ui: &mut UiState) -> Result<bool> {
     // Ctrl+C quit
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        player.stop_playback();
         return Ok(true);
     }
 
@@ -577,6 +615,7 @@ fn handle_key(key: KeyEvent, player: &mut Player, ui: &mut UiState) -> Result<bo
 
     // Quit
     if key.code == KeyCode::Char('q') {
+        player.stop_playback();
         return Ok(true);
     }
 
@@ -770,11 +809,79 @@ fn init_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
     Ok(terminal)
 }
 
-fn restore_terminal(mut terminal: Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
-    terminal::disable_raw_mode().ok();
-    crossterm::execute!(terminal.backend_mut(), terminal::LeaveAlternateScreen).ok();
-    terminal.show_cursor().ok();
-    Ok(())
+fn restore_terminal_minimal() {
+    let _ = terminal::disable_raw_mode();
+    let mut stdout = io::stdout();
+    let _ = crossterm::execute!(stdout, terminal::LeaveAlternateScreen, cursor::Show);
+    let _ = stdout.flush();
+}
+
+struct TerminalCleanup;
+
+impl TerminalCleanup {
+    fn install_panic_hook() {
+        let default_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            restore_terminal_minimal();
+            default_hook(info);
+        }));
+    }
+}
+
+impl Drop for TerminalCleanup {
+    fn drop(&mut self) {
+        restore_terminal_minimal();
+    }
+}
+
+fn home_dir() -> Option<PathBuf> {
+    env::var_os("HOME").map(PathBuf::from)
+}
+
+fn xdg_music_dir() -> Option<PathBuf> {
+    let home = home_dir()?;
+    let config = home.join(".config/user-dirs.dirs");
+    let content = fs::read_to_string(config).ok()?;
+
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let Some(rest) = line.strip_prefix("XDG_MUSIC_DIR=") else {
+            continue;
+        };
+
+        let raw = rest.trim();
+        let raw = raw.trim_matches('"');
+        let expanded = raw.replace("$HOME", &home.to_string_lossy());
+        let p = PathBuf::from(expanded);
+        if p.is_dir() {
+            return Some(p);
+        }
+    }
+
+    None
+}
+
+fn default_music_dir() -> Option<PathBuf> {
+    if let Some(p) = xdg_music_dir() {
+        return Some(p);
+    }
+
+    let home = home_dir()?;
+    for name in ["Music", "music"] {
+        let p = home.join(name);
+        if p.is_dir() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+fn default_library_path() -> PathBuf {
+    default_music_dir().unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
 fn discover_tracks(path: &Path) -> Result<Vec<Track>> {

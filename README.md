@@ -36,6 +36,8 @@ This produces a short executable named `tmp`:
 
 ## Run
 
+If you run without a path, it will try your Music directory (XDG `XDG_MUSIC_DIR` if set, else `~/Music`), falling back to the current directory.
+
 Play a directory (recursively scans for audio files):
 
 ```bash
