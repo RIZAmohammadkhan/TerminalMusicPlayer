@@ -85,7 +85,7 @@ Volume:
 
 - `v` toggle volume mode
 - While volume mode is ON: `↑` volume up, `↓` volume down (`Esc` exits)
-	- Prefers controlling the OS output/mixer volume when supported; falls back to per-app gain.
+	- Prefers controlling the ALSA system mixer when available; falls back to per-app gain.
 
 Library:
 
@@ -110,3 +110,7 @@ Planned improvements:
 - Better library UX: search/filter, sort by name/mtime, shuffle/repeat
 - Metadata: show artist/album/title (tags)
 - Real mixer volume (system volume) instead of per-app gain (implemented via native backends; falls back to app gain)
+
+## Platform support
+
+Linux only.

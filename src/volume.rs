@@ -2,9 +2,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 
-/// Cross-platform volume controller.
+/// Linux volume controller.
 ///
-/// - Prefer a native *system mixer* backend when available for the target OS.
+/// - Prefer the native ALSA *system mixer* backend when available.
 /// - Fall back to per-app gain using `rodio::Sink::set_volume`.
 pub struct VolumeControl {
     backend: Backend,
@@ -133,77 +133,33 @@ enum Backend {
 }
 
 enum SystemBackend {
-    #[cfg(target_os = "linux")]
     LinuxAlsa(linux::AlsaSystemVolume),
-
-    #[cfg(windows)]
-    WindowsEndpoint(windows_backend::WindowsSystemVolume),
-
-    #[cfg(target_os = "macos")]
-    MacCoreAudio(macos_backend::CoreAudioSystemVolume),
 }
 
 impl SystemBackend {
     fn label(&self) -> &'static str {
         match self {
-            #[cfg(target_os = "linux")]
             SystemBackend::LinuxAlsa(_) => "System (ALSA)",
-            #[cfg(windows)]
-            SystemBackend::WindowsEndpoint(_) => "System (Windows)",
-            #[cfg(target_os = "macos")]
-            SystemBackend::MacCoreAudio(_) => "System (CoreAudio)",
         }
     }
 
     fn get(&mut self) -> Result<f32> {
         match self {
-            #[cfg(target_os = "linux")]
             SystemBackend::LinuxAlsa(v) => v.get(),
-            #[cfg(windows)]
-            SystemBackend::WindowsEndpoint(v) => v.get(),
-            #[cfg(target_os = "macos")]
-            SystemBackend::MacCoreAudio(v) => v.get(),
         }
     }
 
     fn set(&mut self, value: f32) -> Result<()> {
         match self {
-            #[cfg(target_os = "linux")]
             SystemBackend::LinuxAlsa(v) => v.set(value),
-            #[cfg(windows)]
-            SystemBackend::WindowsEndpoint(v) => v.set(value),
-            #[cfg(target_os = "macos")]
-            SystemBackend::MacCoreAudio(v) => v.set(value),
         }
     }
 }
 
 fn try_system_backend() -> Option<Backend> {
-    #[cfg(target_os = "linux")]
-    {
-        return linux::AlsaSystemVolume::new()
-            .ok()
-            .map(|b| Backend::System(SystemBackend::LinuxAlsa(b)));
-    }
-
-    #[cfg(windows)]
-    {
-        return windows_backend::WindowsSystemVolume::new()
-            .ok()
-            .map(|b| Backend::System(SystemBackend::WindowsEndpoint(b)));
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        return macos_backend::CoreAudioSystemVolume::new()
-            .ok()
-            .map(|b| Backend::System(SystemBackend::MacCoreAudio(b)));
-    }
-
-    #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
-    {
-        None
-    }
+    linux::AlsaSystemVolume::new()
+        .ok()
+        .map(|b| Backend::System(SystemBackend::LinuxAlsa(b)))
 }
 
 #[cfg(target_os = "linux")]
@@ -226,7 +182,6 @@ mod linux {
             let mixer = Mixer::new("default", false).context("open ALSA mixer")?;
 
             let candidates = ["Master", "PCM", "Speaker", "Headphone", "Front", "Line Out"];
-
             for name in candidates {
                 let id = SelemId::new(name, 0);
                 if let Some(selem) = mixer.find_selem(&id) {
@@ -263,242 +218,38 @@ mod linux {
                 }
             }
 
-            Err(anyhow!("No ALSA mixer element with playback volume found"))
-        }
-
-        fn chan_for_get(selem: &Selem) -> SelemChannelId {
-            // Prefer a stable channel; fall back progressively.
-            let preferred = [
-                SelemChannelId::FrontLeft,
-                SelemChannelId::FrontRight,
-                SelemChannelId::mono(),
-            ];
-
-            for ch in preferred {
-                if selem.has_playback_channel(ch) {
-                    return ch;
-                }
-            }
-
-            SelemChannelId::FrontLeft
+            Err(anyhow!("No usable ALSA mixer control found"))
         }
 
         pub fn get(&mut self) -> Result<f32> {
-            let Some(selem) = self.mixer.find_selem(&self.selem_id) else {
-                return Err(anyhow!("ALSA mixer element disappeared"));
-            };
+            let selem = self
+                .mixer
+                .find_selem(&self.selem_id)
+                .context("find ALSA mixer element")?;
 
-            let ch = Self::chan_for_get(&selem);
             let raw = selem
-                .get_playback_volume(ch)
-                .context("get ALSA playback volume")?;
-
-            let denom = (self.max - self.min) as f32;
-            if denom <= 0.0 {
-                return Err(anyhow!("invalid ALSA playback volume range"));
-            }
-
-            let norm = ((raw - self.min) as f32 / denom).clamp(0.0, 1.0);
-            Ok(norm)
+                .get_playback_volume(SelemChannelId::FrontLeft)
+                .or_else(|_| selem.get_playback_volume(SelemChannelId::FrontRight))
+                .or_else(|_| selem.get_playback_volume(SelemChannelId::mono()))
+                .context("read ALSA playback volume")?;
+            let range = (self.max - self.min).max(1) as f32;
+            let normalized = ((raw - self.min) as f32 / range).clamp(0.0, 1.0);
+            Ok(normalized)
         }
 
         pub fn set(&mut self, value: f32) -> Result<()> {
-            let v = value.clamp(0.0, 1.0);
-            let raw = self.min + ((v * (self.max - self.min) as f32).round() as i64);
+            let value = value.clamp(0.0, 1.0);
+            let selem = self
+                .mixer
+                .find_selem(&self.selem_id)
+                .context("find ALSA mixer element")?;
 
-            // Prefer setting all channels if available.
-            let Some(selem) = self.mixer.find_selem(&self.selem_id) else {
-                return Err(anyhow!("ALSA mixer element disappeared"));
-            };
+            let range = (self.max - self.min).max(1) as f32;
+            let raw = self.min + (value * range).round() as i64;
 
-            selem
-                .set_playback_volume_all(raw)
+            selem.set_playback_volume_all(raw)
                 .context("set ALSA playback volume")?;
-
             Ok(())
-        }
-    }
-}
-
-#[cfg(windows)]
-mod windows_backend {
-    use super::*;
-
-    use windows::{
-        core::Interface,
-        Win32::{
-            Media::Audio::{
-                eConsole, eRender, IAudioEndpointVolume, IMMDeviceEnumerator, MMDeviceEnumerator,
-            },
-            System::Com::{
-                CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
-            },
-        },
-    };
-
-    pub struct WindowsSystemVolume {
-        endpoint: IAudioEndpointVolume,
-    }
-
-    impl WindowsSystemVolume {
-        pub fn new() -> Result<Self> {
-            unsafe {
-                CoInitializeEx(None, COINIT_MULTITHREADED)
-                    .context("CoInitializeEx for system volume")?;
-
-                // If any later step fails, ensure we uninitialize.
-                let res = (|| {
-                    let enumerator: IMMDeviceEnumerator =
-                        CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
-                            .context("Create IMMDeviceEnumerator")?;
-
-                    let device = enumerator
-                        .GetDefaultAudioEndpoint(eRender, eConsole)
-                        .context("GetDefaultAudioEndpoint")?;
-
-                    let endpoint: IAudioEndpointVolume = device
-                        .Activate(CLSCTX_ALL, None)
-                        .context("Activate IAudioEndpointVolume")?;
-
-                    Ok::<_, anyhow::Error>(Self { endpoint })
-                })();
-
-                if res.is_err() {
-                    CoUninitialize();
-                }
-
-                res
-            }
-        }
-
-        pub fn get(&mut self) -> Result<f32> {
-            unsafe {
-                let mut v: f32 = 0.0;
-                self.endpoint
-                    .GetMasterVolumeLevelScalar(&mut v)
-                    .context("GetMasterVolumeLevelScalar")?;
-                Ok(v.clamp(0.0, 1.0))
-            }
-        }
-
-        pub fn set(&mut self, value: f32) -> Result<()> {
-            unsafe {
-                let v = value.clamp(0.0, 1.0);
-                self.endpoint
-                    .SetMasterVolumeLevelScalar(v, std::ptr::null())
-                    .context("SetMasterVolumeLevelScalar")?;
-                Ok(())
-            }
-        }
-    }
-
-    impl Drop for WindowsSystemVolume {
-        fn drop(&mut self) {
-            unsafe {
-                CoUninitialize();
-            }
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-mod macos_backend {
-    use super::*;
-
-    use coreaudio_sys::{
-        kAudioDevicePropertyScopeOutput, kAudioHardwarePropertyDefaultOutputDevice,
-        kAudioObjectPropertyElementMaster, kAudioObjectSystemObject, kAudioPropertyElementMaster,
-        kAudioPropertyScopeOutput, AudioObjectGetPropertyData, AudioObjectID,
-        AudioObjectPropertyAddress, AudioObjectSetPropertyData, AudioValueRange, OSStatus,
-    };
-
-    pub struct CoreAudioSystemVolume {
-        device: AudioObjectID,
-    }
-
-    impl CoreAudioSystemVolume {
-        pub fn new() -> Result<Self> {
-            unsafe {
-                let mut device: AudioObjectID = 0;
-                let mut size = std::mem::size_of::<AudioObjectID>() as u32;
-
-                let addr = AudioObjectPropertyAddress {
-                    mSelector: kAudioHardwarePropertyDefaultOutputDevice,
-                    mScope: kAudioObjectPropertyElementMaster,
-                    mElement: kAudioObjectPropertyElementMaster,
-                };
-
-                let status: OSStatus = AudioObjectGetPropertyData(
-                    kAudioObjectSystemObject,
-                    &addr,
-                    0,
-                    std::ptr::null(),
-                    &mut size,
-                    &mut device as *mut _ as *mut _,
-                );
-
-                if status != 0 || device == 0 {
-                    return Err(anyhow!("CoreAudio: failed to get default output device"));
-                }
-
-                Ok(Self { device })
-            }
-        }
-
-        pub fn get(&mut self) -> Result<f32> {
-            unsafe {
-                let mut volume: f32 = 0.0;
-                let mut size = std::mem::size_of::<f32>() as u32;
-
-                let addr = AudioObjectPropertyAddress {
-                    mSelector: coreaudio_sys::kAudioDevicePropertyVolumeScalar,
-                    mScope: kAudioPropertyScopeOutput,
-                    mElement: kAudioPropertyElementMaster,
-                };
-
-                let status = AudioObjectGetPropertyData(
-                    self.device,
-                    &addr,
-                    0,
-                    std::ptr::null(),
-                    &mut size,
-                    &mut volume as *mut _ as *mut _,
-                );
-
-                if status != 0 {
-                    return Err(anyhow!("CoreAudio: get volume failed"));
-                }
-
-                Ok(volume.clamp(0.0, 1.0))
-            }
-        }
-
-        pub fn set(&mut self, value: f32) -> Result<()> {
-            unsafe {
-                let mut volume = value.clamp(0.0, 1.0);
-                let size = std::mem::size_of::<f32>() as u32;
-
-                let addr = AudioObjectPropertyAddress {
-                    mSelector: coreaudio_sys::kAudioDevicePropertyVolumeScalar,
-                    mScope: kAudioPropertyScopeOutput,
-                    mElement: kAudioPropertyElementMaster,
-                };
-
-                let status = AudioObjectSetPropertyData(
-                    self.device,
-                    &addr,
-                    0,
-                    std::ptr::null(),
-                    size,
-                    &mut volume as *mut _ as *mut _,
-                );
-
-                if status != 0 {
-                    return Err(anyhow!("CoreAudio: set volume failed"));
-                }
-
-                Ok(())
-            }
         }
     }
 }

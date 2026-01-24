@@ -1,3 +1,6 @@
+#[cfg(not(target_os = "linux"))]
+compile_error!("terminal-music-player is Linux-only. Build on Linux (target_os=\"linux\").");
+
 use std::{
     cmp::min,
     fs,
