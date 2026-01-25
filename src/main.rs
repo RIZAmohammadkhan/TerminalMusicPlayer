@@ -6,7 +6,7 @@ use std::{
     env,
     fs,
     fs::File,
-    io::{self, BufReader, Write},
+    io::{self, Write},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -40,6 +40,7 @@ use walkdir::WalkDir;
 
 use signal_hook::{consts::signal::*, flag as signal_flag};
 
+mod audio;
 mod volume;
 use volume::VolumeControl;
 
@@ -453,23 +454,8 @@ fn open_source(
     start_pos: Duration,
     loop_enabled: bool,
 ) -> Result<(Box<dyn Source<Item = f32> + Send>, Option<Duration>)> {
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
-
-    let decoder = rodio::Decoder::new(reader)?;
-    let total = decoder
-        .total_duration()
-        .or_else(|| probe_duration(path).ok());
-
-    // Always call skip_duration so both branches have the same type.
-    let source = decoder.skip_duration(start_pos).convert_samples();
-
-    let source: Box<dyn Source<Item = f32> + Send> = if loop_enabled {
-        Box::new(source.repeat_infinite())
-    } else {
-        Box::new(source)
-    };
-
+    let (source, total) = audio::open_source(path, start_pos, loop_enabled)?;
+    let total = total.or_else(|| probe_duration(path).ok());
     Ok((source, total))
 }
 
