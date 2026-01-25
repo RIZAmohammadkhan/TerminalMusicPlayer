@@ -4,4 +4,4 @@
 
 # Keep the AUR PKGBUILD tracked, ignore other AUR build outputs
 /trix-aur
-
+/trix-player
