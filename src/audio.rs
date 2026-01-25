@@ -12,7 +12,7 @@ use symphonia::core::{
     audio::SampleBuffer,
     codecs::{Decoder, DecoderOptions},
     errors::Error as SymphoniaError,
-    formats::{FormatOptions, FormatReader},
+    formats::{FormatOptions, FormatReader, SeekMode, SeekTo},
     io::MediaSourceStream,
     meta::MetadataOptions,
     probe::Hint,
@@ -117,34 +117,133 @@ impl SymphoniaSource {
             consecutive_decode_errors: 0,
         };
 
-        // Derive a skip budget once we know the best-effort format.
-        let start_frames = (start_pos.as_secs_f64() * source.sample_rate as f64)
-            .max(0.0)
-            .round() as u64;
-        source.skip_samples = start_frames.saturating_mul(source.channels as u64);
-
-        // Prime the decoder so we can fail early instead of hanging on a corrupt stream.
-        source.prime()?;
-        Ok(source)
-    }
-
-    fn prime(&mut self) -> Result<()> {
-        // Try to decode some audio. If we cannot get any samples after a reasonable
-        // number of packets / errors, consider the file unsupported.
-        let mut packets_seen = 0u32;
-        while self.fifo.is_empty() && packets_seen < 250 {
-            packets_seen += 1;
-            if self.decode_more().is_ok() {
-                // keep looping until we have samples
+        // Seek to the desired position using Symphonia's container seeking when possible.
+        // This avoids decoding from the start (which can starve the audio thread and
+        // cause ALSA underruns when the user seeks rapidly).
+        if start_pos > Duration::ZERO {
+            if source.try_seek_to(start_pos).is_err() {
+                // Fallback: decode-and-discard (slow, but done before playback starts).
+                let start_frames = (start_pos.as_secs_f64() * source.sample_rate as f64)
+                    .max(0.0)
+                    .round() as u64;
+                source.skip_samples = start_frames.saturating_mul(source.channels as u64);
             }
         }
 
-        if self.fifo.is_empty() {
-            return Err(anyhow!(
-                "no decodable audio frames (stream may be badly corrupted or unsupported)"
-            ));
+        // Prime the decoder so we can fail early instead of hanging on a corrupt stream.
+        source.prime_and_apply_initial_skip()?;
+        Ok(source)
+    }
+
+    fn next_track_packet(&mut self) -> Result<symphonia::core::formats::Packet> {
+        loop {
+            let packet = match self.format.next_packet() {
+                Ok(p) => p,
+                Err(SymphoniaError::IoError(_)) => return Err(anyhow!("eof")),
+                Err(SymphoniaError::ResetRequired) => {
+                    self.decoder.reset();
+                    continue;
+                }
+                Err(e) => return Err(anyhow!(e)),
+            };
+
+            if packet.track_id() != self.track_id {
+                continue;
+            }
+
+            return Ok(packet);
         }
+    }
+
+    fn try_seek_to(&mut self, pos: Duration) -> Result<()> {
+        let time: Time = pos.as_secs_f64().into();
+        let seek_res = self
+            .format
+            .seek(
+                SeekMode::Accurate,
+                SeekTo::Time {
+                    time,
+                    track_id: Some(self.track_id),
+                },
+            )
+            .context("symphonia seek")?;
+
+        // After seeking, refine within the next packet so playback starts close to
+        // the requested time.
+        self.decoder.reset();
+        self.fifo.clear();
+
+        // `SeekedTo` is expressed in the track's timebase (typically frames). We now need
+        // to skip `required_ts - actual_ts` frames into the first decoded packet.
+        let mut frames_to_pass = seek_res.required_ts.saturating_sub(seek_res.actual_ts);
+
+        // Find the first packet that overlaps the desired position.
+        let packet = loop {
+            let candidate = self.next_track_packet()?;
+            if candidate.dur() > frames_to_pass {
+                break candidate;
+            }
+            frames_to_pass = frames_to_pass.saturating_sub(candidate.dur());
+        };
+
+        // Decode with a couple retries to tolerate bad frames.
+        const MAX_DECODE_RETRIES: usize = 3;
+        let mut decoded = self.decoder.decode(&packet);
+        for _ in 0..MAX_DECODE_RETRIES {
+            if decoded.is_ok() {
+                break;
+            }
+            let retry_packet = self.next_track_packet()?;
+            decoded = self.decoder.decode(&retry_packet);
+        }
+
+        let audio = decoded.context("decode after seek")?;
+        let spec = *audio.spec();
+        let mut sample_buf = SampleBuffer::<f32>::new(audio.frames() as u64, spec);
+        sample_buf.copy_interleaved_ref(audio);
+
+        // Track observed format (best-effort).
+        self.sample_rate = self.sample_rate.max(spec.rate).max(1);
+        self.channels = self.channels.max(spec.channels.count() as u16).max(1);
+
+        let ch = spec.channels.count().max(1);
+        let offset = (frames_to_pass as usize).saturating_mul(ch);
+        if offset < sample_buf.samples().len() {
+            self.fifo.extend(sample_buf.samples()[offset..].iter().copied());
+        }
+
+        // Seeking is now handled; no additional skip budget required.
+        self.skip_samples = 0;
         Ok(())
+    }
+
+    fn prime_and_apply_initial_skip(&mut self) -> Result<()> {
+        // Ensure we have samples and, if we couldn't seek, apply an initial skip budget
+        // up-front (so the audio thread doesn't have to decode-and-discard).
+        let mut packets_seen = 0u32;
+        while packets_seen < 1_000 {
+            packets_seen += 1;
+
+            if self.fifo.is_empty() {
+                let _ = self.decode_more();
+            }
+
+            while self.skip_samples > 0 {
+                if self.fifo.pop_front().is_some() {
+                    self.skip_samples -= 1;
+                } else {
+                    break;
+                }
+            }
+
+            if self.skip_samples == 0 && !self.fifo.is_empty() {
+                return Ok(());
+            }
+        }
+
+        Err(anyhow!(
+            "no decodable audio frames (stream may be badly corrupted, unsupported, or unseekable)"
+        ))
     }
 
     fn reopen_for_loop(&mut self) -> Result<()> {
@@ -175,22 +274,7 @@ impl SymphoniaSource {
 
     fn decode_more(&mut self) -> Result<()> {
         loop {
-            let packet = match self.format.next_packet() {
-                Ok(p) => p,
-                Err(SymphoniaError::IoError(_)) => {
-                    // Treat IO errors as EOF for local files.
-                    return Err(anyhow!("eof"));
-                }
-                Err(SymphoniaError::ResetRequired) => {
-                    self.decoder.reset();
-                    continue;
-                }
-                Err(e) => return Err(anyhow!(e)),
-            };
-
-            if packet.track_id() != self.track_id {
-                continue;
-            }
+            let packet = self.next_track_packet()?;
 
             match self.decoder.decode(&packet) {
                 Ok(audio) => {
