@@ -1,2 +1,7 @@
 /test_audio
 /target
+.SRCINFO
+
+# Keep the AUR PKGBUILD tracked, ignore other AUR build outputs
+/trix-aur
+
