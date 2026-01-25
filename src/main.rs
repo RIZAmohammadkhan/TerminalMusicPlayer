@@ -24,7 +24,7 @@ use crossterm::{
 };
 use ratatui::{
     prelude::*,
-    text::Text,
+    text::{Span, Text},
     widgets::block::Title,
     widgets::{Block, BorderType, Borders, Clear, Gauge, List, ListItem, Paragraph, Wrap},
 };
@@ -1269,7 +1269,10 @@ fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState) {
                 .add_modifier(Modifier::BOLD),
         )
         .ratio(ratio)
-        .label(label);
+        .label(Span::styled(
+            label,
+            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        ));
     f.render_widget(gauge, right[1]);
 
     let hints = hints_lines(player, ui);
