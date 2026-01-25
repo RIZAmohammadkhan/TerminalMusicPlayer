@@ -1,4 +1,4 @@
-# Terminal Music Player (Rust TUI)
+# Trix Player (Rust TUI)
 
 A fast, keyboard-driven terminal music player for Linux terminals (kitty, alacritty, foot, wezterm, etc.).
 

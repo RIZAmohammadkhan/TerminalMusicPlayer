@@ -1,5 +1,5 @@
 [package]
-name = "terminal-music-player"
+name = "trix-player"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
@@ -10,6 +10,10 @@ autobins = false
 
 description = "A beautiful, keyboard-driven terminal music player for Linux."
 repository = "https://github.com/RIZAmohammadkhan/TerminalMusicPlayer"
+homepage = "https://github.com/RIZAmohammadkhan/TerminalMusicPlayer"
+readme = "README.md"
+keywords = ["music", "player", "tui", "terminal", "audio"]
+categories = ["command-line-utilities", "multimedia::audio"]
 
 [dependencies]
 anyhow = "1.0"
@@ -50,7 +54,7 @@ depends = "$auto, libasound2"
 license = "MIT"
 assets = [
 	{ source = "target/release/trix", dest = "/usr/bin/trix", mode = "755" },
-	{ source = "README.md", dest = "/usr/share/doc/terminal-music-player/README.md", mode = "644", doc = true },
+	{ source = "README.md", dest = "/usr/share/doc/trix-player/README.md", mode = "644", doc = true },
 ]
 
 [package.metadata.generate-rpm.requires]
