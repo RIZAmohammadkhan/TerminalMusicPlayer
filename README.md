@@ -150,8 +150,8 @@ Trix is designed to be used entirely without a mouse.
 | Key | Action |
 | :--- | :--- |
 | **Navigation** | |
-| `↑` / `k` | Move selection up |
-| `↓` / `j` | Move selection down |
+| `↑`  | Move selection up |
+| `↓`  | Move selection down |
 | `Enter` | Play selected track |
 | `PgUp` / `PgDn` | Scroll page up/down |
 | `Home` / `End` | Jump to top/bottom |
