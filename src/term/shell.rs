@@ -46,49 +46,44 @@ pub(crate) fn hide_to_shell_toggleable(terminal: &mut AppTerminal) -> Result<()>
         .context("open pty")?;
 
     let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
-    let cmd = CommandBuilder::new(shell);
-    let mut child = pair.slave.spawn_command(cmd).context("spawn shell")?;
+    let spawn_shell = || -> Result<Box<dyn portable_pty::Child + Send + Sync>> {
+        let cmd = CommandBuilder::new(shell.clone());
+        pair.slave.spawn_command(cmd).context("spawn shell")
+    };
+    let mut child = spawn_shell()?;
 
     // Print a small hint on the real terminal.
     {
         let mut out = io::stdout();
-        writeln!(
-            out,
-            "\nTrix hidden. Press F12 again to return (or type 'exit').\n"
-        )?;
+        writeln!(out, "\nTrix hidden. Press F12 again to return.\n")?;
         out.flush().ok();
     }
 
     let mut pty_writer = pair.master.take_writer().context("pty take writer")?;
     let mut pty_reader = pair.master.try_clone_reader().context("pty clone reader")?;
 
+    let master_fd = pair
+        .master
+        .as_raw_fd()
+        .context("get pty master raw fd")?;
+
     // Track window-size changes so the shell gets correct $COLUMNS/$LINES behavior.
     let winch = Arc::new(AtomicBool::new(false));
     signal_flag::register(SIGWINCH, Arc::clone(&winch)).ok();
-
-    // Pump PTY output to stdout.
-    let out_thread = std::thread::spawn(move || {
-        let mut out = io::stdout();
-        let mut buf = [0u8; 8192];
-        loop {
-            match std::io::Read::read(&mut pty_reader, &mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    let _ = std::io::Write::write_all(&mut out, &buf[..n]);
-                    let _ = std::io::Write::flush(&mut out);
-                }
-                Err(_) => break,
-            }
-        }
-    });
 
     // Forward raw user input bytes into the PTY.
     // Intercept F12 (commonly sent as ESC [ 2 4 ~) to return.
     let stdin_fd = io::stdin().as_raw_fd();
     // Safety: stdin_fd is a valid FD for the life of this function.
     let stdin_borrowed = unsafe { BorrowedFd::borrow_raw(stdin_fd) };
-    let mut poll_fds = [PollFd::new(stdin_borrowed, PollFlags::POLLIN)];
+    // Safety: master_fd remains valid while `pair.master` is alive.
+    let master_borrowed = unsafe { BorrowedFd::borrow_raw(master_fd) };
+    let mut poll_fds = [
+        PollFd::new(stdin_borrowed, PollFlags::POLLIN),
+        PollFd::new(master_borrowed, PollFlags::POLLIN),
+    ];
     let mut stdin = io::stdin();
+    let mut out = io::stdout();
 
     let mut pending_esc = false;
     let mut pending_esc_since: Option<Instant> = None;
@@ -99,10 +94,18 @@ pub(crate) fn hide_to_shell_toggleable(terminal: &mut AppTerminal) -> Result<()>
     // We treat this as the hide/unhide toggle while the subshell is active.
     const F12_SEQ: &[u8] = b"[24~";
 
-    loop {
-        // If the shell exited, return to the TUI.
+    let mut return_to_tui = false;
+    'hidden: loop {
+        // If the shell exits, immediately respawn it.
+        // This keeps "hide-to-shell" mode active until the user presses F12.
         if let Ok(Some(_)) = child.try_wait() {
-            break;
+            child = spawn_shell()?;
+            pty_reader = pair.master.try_clone_reader().context("pty clone reader")?;
+            let _ = writeln!(
+                out,
+                "\n(shell exited; started a new one — press F12 to return to Trix)\n"
+            );
+            let _ = out.flush();
         }
 
         // Apply resize if we saw a SIGWINCH.
@@ -143,74 +146,108 @@ pub(crate) fn hide_to_shell_toggleable(terminal: &mut AppTerminal) -> Result<()>
             Err(nix::errno::Errno::EINTR) => continue,
             Err(e) => {
                 let _ = child.kill();
-                let _ = out_thread.join();
                 return Err(anyhow::Error::new(e)).context("poll stdin while hidden");
             }
         }
 
-        let ready = poll_fds
+        // Drain PTY output when available.
+        let pty_ready = poll_fds
+            .get(1)
+            .and_then(|fd| fd.revents())
+            .map(|ev| ev.contains(PollFlags::POLLIN))
+            .unwrap_or(false);
+
+        if pty_ready {
+            let mut buf = [0u8; 8192];
+            match pty_reader.read(&mut buf) {
+                Ok(0) => {
+                    // The slave side may have closed. We'll respawn the shell on the next loop.
+                }
+                Ok(n) => {
+                    let _ = out.write_all(&buf[..n]);
+                    let _ = out.flush();
+                }
+                Err(_) => {}
+            }
+        }
+
+        // Read stdin bytes when available.
+        let stdin_ready = poll_fds
             .get(0)
             .and_then(|fd| fd.revents())
             .map(|ev| ev.contains(PollFlags::POLLIN))
             .unwrap_or(false);
 
-        if !ready {
-            continue;
-        }
+        if stdin_ready {
+            let n = match stdin.read(&mut stdin_buf) {
+                Ok(0) => {
+                    // stdin closed; treat as "return" to avoid leaving the user stuck.
+                    return_to_tui = true;
+                    break 'hidden;
+                }
+                Ok(n) => n,
+                Err(e) => {
+                    let _ = child.kill();
+                    return Err(anyhow::Error::new(e)).context("read stdin bytes while hidden");
+                }
+            };
 
-        let n = match stdin.read(&mut stdin_buf) {
-            Ok(0) => break,
-            Ok(n) => n,
-            Err(e) => {
-                let _ = child.kill();
-                let _ = out_thread.join();
-                return Err(anyhow::Error::new(e)).context("read stdin bytes while hidden");
-            }
-        };
+            for &b in &stdin_buf[..n] {
+                if pending_esc {
+                    esc_buf.push(b);
 
-        for &b in &stdin_buf[..n] {
-            if pending_esc {
-                esc_buf.push(b);
+                    // Check for F12 sequence (ESC + [24~).
+                    if esc_buf.len() <= F12_SEQ.len() && esc_buf == F12_SEQ[..esc_buf.len()] {
+                        if esc_buf.len() == F12_SEQ.len() {
+                            return_to_tui = true;
+                            pending_esc = false;
+                            pending_esc_since = None;
+                            esc_buf.clear();
+                            break;
+                        }
 
-                // Check for F12 sequence (ESC + [24~).
-                if esc_buf.len() <= F12_SEQ.len() && esc_buf == F12_SEQ[..esc_buf.len()] {
-                    if esc_buf.len() == F12_SEQ.len() {
-                        // Toggle back: terminate the shell and return.
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        pending_esc = false;
-                        pending_esc_since = None;
-                        esc_buf.clear();
-                        break;
+                        // Still matching the prefix; keep waiting for more bytes.
+                        pending_esc_since = Some(Instant::now());
+                        continue;
                     }
 
-                    // Still matching the prefix; keep waiting for more bytes.
-                    pending_esc_since = Some(Instant::now());
+                    // Not a recognized sequence: forward ESC + buffered bytes to the PTY.
+                    let _ = pty_writer.write_all(&[0x1b]);
+                    let _ = pty_writer.write_all(&esc_buf);
+                    esc_buf.clear();
+                    pending_esc = false;
+                    pending_esc_since = None;
                     continue;
                 }
 
-                // Not a recognized sequence: forward ESC + buffered bytes to the PTY.
-                let _ = pty_writer.write_all(&[0x1b]);
-                let _ = pty_writer.write_all(&esc_buf);
-                esc_buf.clear();
-                pending_esc = false;
-                pending_esc_since = None;
-                continue;
-            }
+                if b == 0x1b {
+                    pending_esc = true;
+                    pending_esc_since = Some(Instant::now());
+                    esc_buf.clear();
+                    continue;
+                }
 
-            if b == 0x1b {
-                pending_esc = true;
-                pending_esc_since = Some(Instant::now());
-                esc_buf.clear();
-                continue;
+                let _ = pty_writer.write_all(&[b]);
             }
+            let _ = pty_writer.flush();
 
-            let _ = pty_writer.write_all(&[b]);
+            if return_to_tui {
+                break 'hidden;
+            }
         }
-        let _ = pty_writer.flush();
     }
 
-    let _ = out_thread.join();
+    if return_to_tui {
+        // Best-effort termination: avoid blocking forever here.
+        let _ = child.kill();
+        let deadline = Instant::now() + Duration::from_millis(800);
+        while Instant::now() < deadline {
+            if let Ok(Some(_)) = child.try_wait() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
 
     // Restore the TUI.
     {
