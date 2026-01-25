@@ -1,122 +1,166 @@
-# Trix Player (Rust TUI)
+# Trix Player
 
-A fast, keyboard-driven terminal music player for Linux terminals (kitty, alacritty, foot, wezterm, etc.).
+<div align="center">
 
-This project is built for people who hate GUIs and want a clean, responsive, “nvim-like” music experience:
+![Trix Version](https://img.shields.io/github/v/release/RIZAmohammadkhan/TerminalMusicPlayer?label=version)
+![AUR Version](https://img.shields.io/aur/version/trix-player)
+![License](https://img.shields.io/github/license/RIZAmohammadkhan/TerminalMusicPlayer)
+![Build Status](https://img.shields.io/github/actions/workflow/status/RIZAmohammadkhan/TerminalMusicPlayer/release.yml)
 
-- Rust + `ratatui` TUI (snappy redraws)
-- `rodio` audio playback with Symphonia decoding
-- Vim-ish, single-key controls + arrow-key seeking
-- Track name + time/progress display
+**A beautiful, keyboard-driven terminal music player for Linux.**
 
-## Status
+[Features](#features) • [Installation](#installation) • [Usage](#usage) • [Building](#building-from-source)
 
-Early but usable: it can scan a folder of audio files, play them, switch tracks, seek, and adjust volume.
+</div>
 
-## Requirements (Linux)
+---
 
-- Rust toolchain (`cargo`)
-- A working audio setup (ALSA / PipeWire / PulseAudio)
-- System ALSA development headers (needed by `cpal`/`alsa-sys`):
-	- Debian/Ubuntu: `sudo apt install libasound2-dev`
-	- Fedora: `sudo dnf install alsa-lib-devel`
-	- Arch: `sudo pacman -S alsa-lib`
+**Trix** is a lightweight, high-performance music player built with Rust. It is designed for Linux users who prefer the terminal, offering a clean TUI (Terminal User Interface), robust keyboard navigation (vim-like), and low resource usage.
 
-## Build
+> **Note:** Please add a screenshot of the player here. Create a folder named `assets` in your repo and add a `screenshot.png`, then uncomment the line below.
+>
+> `![Trix Player Screenshot](assets/screenshot.png)`
 
-```bash
-cargo build --release
-```
+## ✨ Features
 
-This produces a short executable named `trix`:
+*   **Format Support:** MP3, FLAC, WAV, OGG, M4A, AAC, Opus.
+*   **Intuitive TUI:** Clean interface built with `ratatui`.
+*   **Volume Control:** Native ALSA system volume control (with software fallback).
+*   **Search:** Fast, fuzzy-like filtering to find tracks instantly.
+*   **Playback Control:** Shuffle, Loop (track/playlist), and Seek.
+*   **File Management:** Delete tracks directly from the player.
+*   **Standard Compliance:** automatically detects music via `XDG_MUSIC_DIR` or defaults to `~/Music`.
 
-```bash
-./target/release/trix --help
-```
+## 📦 Installation
 
-## Run
-
-If you run without a path, it will try your Music directory (XDG `XDG_MUSIC_DIR` if set, else `~/Music`), falling back to the current directory.
-
-Play a directory (recursively scans for audio files):
+### Arch Linux (AUR)
+Trix is available on the AUR as [`trix-player`](https://aur.archlinux.org/packages/trix-player). Use your favorite AUR helper:
 
 ```bash
-cargo run --release -- /path/to/music
+yay -S trix-player
+# or
+paru -S trix-player
 ```
 
-Play a single file:
+### Debian / Ubuntu
+Download the latest `.deb` file from the [Releases Page](https://github.com/RIZAmohammadkhan/TerminalMusicPlayer/releases).
 
 ```bash
-cargo run --release -- /path/to/song.mp3
+sudo dpkg -i trix-player_*.deb
+sudo apt-get install -f # Fix dependencies if needed
 ```
 
-Start at a specific track index:
+### Fedora / RHEL / openSUSE
+Download the latest `.rpm` file from the [Releases Page](https://github.com/RIZAmohammadkhan/TerminalMusicPlayer/releases).
 
 ```bash
-cargo run --release -- --index 10 /path/to/music
+sudo rpm -i trix-player-*.rpm
 ```
 
-## Supported formats
+### Generic Linux (Binary)
+Download the `.tar.xz` archive from the Releases page, extract it, and move the binary to your path.
 
-File extensions currently detected:
+```bash
+tar -xf trix-player-*.tar.xz
+sudo mv trix /usr/local/bin/
+```
 
-- `mp3`, `flac`, `wav`, `ogg`, `m4a`, `aac`, `opus`
+### One-line Install (curl)
+Installs the latest `x86_64-unknown-linux-gnu` release into `~/.local/bin` (or `/usr/local/bin` if run as root).
 
-(Actual decode support is provided by Symphonia; the list above is just the library scan filter.)
+```bash
+curl -fsSL https://raw.githubusercontent.com/RIZAmohammadkhan/TerminalMusicPlayer/main/install.sh | sh
+```
 
-## Keybindings
+Install to a custom prefix:
 
-Playback:
+```bash
+curl -fsSL https://raw.githubusercontent.com/RIZAmohammadkhan/TerminalMusicPlayer/main/install.sh | PREFIX=/usr/local sh
+```
 
-- `q` quit
-- `Space` pause/resume
-- `P` previous track
-- `N` next track
-- `r` restart current track (play from start)
-- `l` loop selected/current track
-- `s` toggle shuffle order
+### From Source (Rust)
+If you have the Rust toolchain installed:
 
-Seeking:
+```bash
+git clone https://github.com/RIZAmohammadkhan/TerminalMusicPlayer.git
+cd TerminalMusicPlayer
+cargo install --path .
+```
 
-- `p` seek **-10s**
-- `n` seek **+10s**
-- `←` seek **-5s**
-- `→` seek **+5s**
+## 🚀 Usage
 
-Volume:
+Run the player by typing:
 
-- `v` toggle volume mode
-- While volume mode is ON: `↑` volume up, `↓` volume down (`Esc` exits)
-	- Prefers controlling the ALSA system mixer when available; falls back to per-app gain.
+```bash
+trix
+```
 
-Library:
+By default, Trix looks for music in your XDG Music directory (usually `~/Music`). You can also play a specific directory or file:
 
-- `↑/↓` select track
-- `Enter` play selected
-- `S` search (type to select; `Enter` plays; `Esc` cancels)
-- `D` delete selected track (press twice to confirm)
+```bash
+trix /path/to/my/songs
+```
 
-## Notes on seeking
+### Keyboard Controls
 
-Seeking is implemented by restarting decoding at the new offset (simple and reliable). It’s usually fast, but very large files or some formats may seek less smoothly.
+Trix is designed to be used entirely without a mouse.
 
-## Troubleshooting
+| Key | Action |
+| :--- | :--- |
+| **Navigation** | |
+| `↑` / `k` | Move selection up |
+| `↓` / `j` | Move selection down |
+| `Enter` | Play selected track |
+| `PgUp` / `PgDn` | Scroll page up/down |
+| `Home` / `End` | Jump to top/bottom |
+| **Playback** | |
+| `Space` | Pause / Resume |
+| `N` | Play next track |
+| `P` | Play previous track |
+| `l` | Toggle **Loop** (Current track) |
+| `s` | Toggle **Shuffle** |
+| `r` | Restart current track |
+| **Seeking** | |
+| `→` | Seek forward 5s |
+| `←` | Seek backward 5s |
+| `n` | Seek forward 10s |
+| `p` | Seek backward 10s |
+| **Utility** | |
+| `S` | **Search** mode (Type to filter, `Enter` to play) |
+| `v` | **Volume** mode (Use `↑`/`↓` to adjust, `v`/`Esc` to exit) |
+| `D` | **Delete** track (Press twice to confirm) |
+| `h` / `?` | Toggle **Help** / Cheatsheet |
+| `q` | Quit |
 
-- No audio / ALSA error at startup: install the ALSA dev package for your distro (see Requirements) and ensure your system audio works outside this app.
-- Terminal looks weird after crash: run `reset` or restart the terminal.
+## 🔧 Dependencies
 
-## Roadmap
+To build or run Trix, you need ALSA development libraries installed on your system.
 
-Planned improvements:
+*   **Debian/Ubuntu:** `sudo apt install libasound2-dev`
+*   **Fedora:** `sudo dnf install alsa-lib-devel`
+*   **Arch:** `sudo pacman -S alsa-lib`
 
-- Better library UX: search/filter, sort by name/mtime, shuffle/repeat
-- Metadata: show artist/album/title (tags)
-- Real mixer volume (system volume) instead of per-app gain (implemented via native backends; falls back to app gain)
+## 🤝 Contributing
 
-## Platform support
+Contributions are welcome! Feel free to open issues for bugs or feature requests.
 
-Linux only.
+1.  Fork the repository.
+2.  Create your feature branch (`git checkout -b feature/AmazingFeature`).
+3.  Commit your changes (`git commit -m 'Add some AmazingFeature'`).
+4.  Push to the branch (`git push origin feature/AmazingFeature`).
+5.  Open a Pull Request.
 
-## License
+## 📄 License
 
-MIT — see [LICENSE](LICENSE).
+Distributed under the MIT License. See `LICENSE` for more information.
+
+## 👤 Author
+
+**Riza Mohammad**
+*   GitHub: [@RIZAmohammadkhan](https://github.com/RIZAmohammadkhan)
+
+---
+
+<div align="center">
+Made with ❤️ and Rust
+</div>
