@@ -381,7 +381,7 @@ fn hints_lines(player: &Player, ui: &UiState, theme: &Theme) -> Vec<Line<'static
         Span::raw("Press "),
         Span::styled("h", key),
         Span::raw(" for cheatsheet • "),
-        Span::styled("Ctrl+Alt+x", key),
+        Span::styled("F12", key),
         Span::raw(" hide/unhide • "),
         Span::styled("v", key),
         Span::raw(" volume mode • "),
@@ -419,7 +419,7 @@ fn help_text(ui: &UiState) -> String {
     [
         "General",
         "  h or ?      toggle this help",
-        "  Ctrl+Alt+x  hide/unhide (shell; press again to return)",
+        "  F12        hide/unhide (shell; press again to return)",
         "  q           quit",
         "  s           toggle shuffle order",
         "  S           search library (type to select)",

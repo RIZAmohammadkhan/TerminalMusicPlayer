@@ -81,16 +81,8 @@ pub(crate) fn handle_key(key: KeyEvent, player: &mut Player, ui: &mut UiState) -
     let is_press = key.kind == KeyEventKind::Press;
     let is_repeat = key.kind == KeyEventKind::Repeat;
 
-    // Hide-to-shell toggle: Ctrl+Alt+x hides/unhides.
-    // Note: some terminals may report Ctrl+Alt+x as Backspace with CONTROL+ALT modifiers.
-    if is_press
-        && ((key.code == KeyCode::Char('x')
-            && key.modifiers.contains(KeyModifiers::CONTROL)
-            && key.modifiers.contains(KeyModifiers::ALT))
-            || (key.code == KeyCode::Backspace
-                && key.modifiers.contains(KeyModifiers::CONTROL)
-                && key.modifiers.contains(KeyModifiers::ALT)))
-    {
+    // Hide-to-shell toggle: F12 hides/unhides.
+    if is_press && matches!(key.code, KeyCode::F(12)) {
         return Ok(UiAction::HideToShell);
     }
 

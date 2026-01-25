@@ -12,7 +12,7 @@ pub(crate) use shell::hide_to_shell_toggleable;
 pub(crate) fn init_terminal() -> Result<AppTerminal> {
     terminal::enable_raw_mode().context("enable raw mode")?;
     let mut stdout = io::stdout();
-    crossterm::execute!(stdout, terminal::EnterAlternateScreen)
+    crossterm::execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide)
         .context("enter alternate screen")?;
 
     let backend = CrosstermBackend::new(stdout);

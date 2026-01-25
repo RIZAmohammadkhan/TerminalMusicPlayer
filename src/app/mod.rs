@@ -142,7 +142,7 @@ pub(crate) fn run() -> Result<()> {
                         ui.reset_transient();
 
                         // Temporarily hide the TUI and run a subshell in a PTY.
-                        // Press Ctrl+Alt+x again (or exit the shell) to return.
+                        // Press F12 again (or exit the shell) to return.
                         // Audio playback continues.
                         if let Err(e) = hide_to_shell_toggleable(&mut terminal) {
                             // If the terminal was closed while hidden, treat it as a clean quit.
