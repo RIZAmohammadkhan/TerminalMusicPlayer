@@ -149,6 +149,8 @@ Contributions are welcome! Feel free to open issues for bugs or feature requests
 4.  Push to the branch (`git push origin feature/AmazingFeature`).
 5.  Open a Pull Request.
 
+## Known Bugs
+1. closing terminal results in 1 second lag of audio closure
 
 ## 📄 License
 
