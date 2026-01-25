@@ -28,10 +28,10 @@ Early but usable: it can scan a folder of audio files, play them, switch tracks,
 cargo build --release
 ```
 
-This produces a short executable named `tmp`:
+This produces a short executable named `trix`:
 
 ```bash
-./target/release/tmp --help
+./target/release/trix --help
 ```
 
 ## Run
@@ -116,3 +116,7 @@ Planned improvements:
 ## Platform support
 
 Linux only.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

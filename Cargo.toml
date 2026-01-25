@@ -2,12 +2,14 @@
 name = "terminal-music-player"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+authors = ["Riza Mohammad <rizamohammad.work@gmail.com>"]
 
 # We want a short, easy-to-type executable name.
 autobins = false
 
 description = "A beautiful, keyboard-driven terminal music player for Linux."
-repository = "https://github.com/riza/terminal-music-player"
+repository = "https://github.com/RIZAmohammadkhan/TerminalMusicPlayer"
 
 [dependencies]
 anyhow = "1.0"
@@ -37,7 +39,7 @@ lto = "thin"
 [package.metadata.deb]
 # NOTE: cargo-deb uses this to populate Debian control metadata.
 # If you want a stricter Maintainer format, use: "Your Name <you@example.com>".
-maintainer = "Riza"
+maintainer = "Riza Mohammad <rizamohammad.work@gmail.com>"
 section = "sound"
 priority = "optional"
 # ALSA is used at runtime on Linux; keep $auto so cargo-deb can also infer other deps.
@@ -45,9 +47,9 @@ depends = "$auto, libasound2"
 
 [package.metadata.generate-rpm]
 # NOTE: RPM packaging needs a license string. Update this to match your project.
-license = "UNLICENSED"
+license = "MIT"
 assets = [
-	{ source = "target/release/tmp", dest = "/usr/bin/tmp", mode = "755" },
+	{ source = "target/release/trix", dest = "/usr/bin/trix", mode = "755" },
 	{ source = "README.md", dest = "/usr/share/doc/terminal-music-player/README.md", mode = "644", doc = true },
 ]
 
@@ -55,5 +57,5 @@ assets = [
 alsa-lib = "*"
 
 [[bin]]
-name = "tmp"
+name = "trix"
 path = "src/main.rs"
