@@ -533,6 +533,76 @@ pub(crate) fn help_wrapped_lines(ui: &UiState, width: u16) -> Vec<String> {
             continue;
         }
 
+        // If this looks like a "keys  description" help entry, preserve the keys column
+        // so it can be styled properly even when wrapped.
+        let mut split_at: Option<usize> = None;
+        let mut run = 0usize;
+        for (i, ch) in content.char_indices() {
+            if ch == ' ' {
+                run += 1;
+                if run >= 2 {
+                    split_at = Some(i + 1 - run);
+                    break;
+                }
+            } else {
+                run = 0;
+            }
+        }
+
+        if let Some(at) = split_at {
+            let left = content[..at].trim_end();
+            let right = content[at..].trim();
+            let left_w = unicode_width::UnicodeWidthStr::width(left);
+            let pad = 2usize;
+            let avail_desc = max_width
+                .saturating_sub(indent_len)
+                .saturating_sub(left_w)
+                .saturating_sub(pad)
+                .max(1);
+
+            let mut first = true;
+            let mut current = String::new();
+            for word in right.split_whitespace() {
+                let word_w = unicode_width::UnicodeWidthStr::width(word);
+                if current.is_empty() {
+                    current.push_str(word);
+                } else {
+                    let cur_w = unicode_width::UnicodeWidthStr::width(current.as_str());
+                    if cur_w + 1 + word_w <= avail_desc {
+                        current.push(' ');
+                        current.push_str(word);
+                    } else {
+                        if first {
+                            out.push(format!("{indent}{left}  {current}"));
+                            first = false;
+                        } else {
+                            out.push(format!(
+                                "{}{}",
+                                " ".repeat(indent_len + left_w + pad),
+                                current
+                            ));
+                        }
+                        current.clear();
+                        current.push_str(word);
+                    }
+                }
+            }
+
+            if !current.is_empty() {
+                if first {
+                    out.push(format!("{indent}{left}  {current}"));
+                } else {
+                    out.push(format!(
+                        "{}{}",
+                        " ".repeat(indent_len + left_w + pad),
+                        current
+                    ));
+                }
+            }
+            continue;
+        }
+
+        // Fallback: generic wrapping.
         let avail = max_width.saturating_sub(indent_len).max(1);
         let mut current = String::new();
         for word in content.split_whitespace() {
