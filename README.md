@@ -154,7 +154,6 @@ Trix is designed to be used entirely without a mouse.
 | `↓`  | Move selection down |
 | `Enter` | Play selected track |
 | `PgUp` / `PgDn` | Scroll page up/down |
-| `Home` / `End` | Jump to top/bottom |
 | **Playback** | |
 | `Space` | Pause / Resume |
 | `N` | Play next track |
@@ -171,7 +170,7 @@ Trix is designed to be used entirely without a mouse.
 | `S` | **Search** mode (Type to filter, `Enter` to play) |
 | `m` | **Move** to timestamp (e.g. `1:30`, `01:02:03`) |
 | `v` | **Volume** mode (Use `↑`/`↓` to adjust, `v`/`Esc` to exit) |
-| `Ctrl` + `Alt` + `x` | Hide/Unhide Trix (shell; press again to return, or `exit`) |
+| `F12` | Hide/Unhide Trix (shell; press again to return, or `exit`) |
 | `D` | **Delete** track (Press twice to confirm) |
 | `h` / `?` | Toggle **Help** / Cheatsheet |
 | `q` | Quit |
