@@ -1,0 +1,26 @@
+[workspace]
+members = ["cargo:."]
+
+# Config for 'dist'
+[dist]
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.30.3"
+# CI backends to support
+ci = "github"
+# The installers to generate for each app
+installers = []
+# Target platforms to build apps for (Rust target-triple syntax)
+targets = ["x86_64-unknown-linux-gnu"]
+
+# Archive format for unix-like platforms
+unix-archive = ".tar.xz"
+# Where to host releases
+hosting = "github"
+
+[dist.dependencies.apt]
+libasound2-dev = "*"
+pkg-config = "*"
+
+# Optional (but convenient): allow the same job to build .deb/.rpm via external tools.
+rpm = "*"
+dpkg-dev = "*"

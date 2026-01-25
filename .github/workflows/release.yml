@@ -9,54 +9,74 @@ permissions:
   contents: write
 
 jobs:
-  build-and-upload:
-    name: Build Linux binary and upload
-    runs-on: ubuntu-latest
+  build-and-release:
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Install system deps (ALSA)
+      - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev
+          sudo apt-get install -y \
+            libasound2-dev \
+            pkg-config \
+            dpkg-dev \
+            rpm \
+            xz-utils
 
-      - name: Install Rust
+      - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+      - name: Install release tools
+        run: |
+          cargo install cargo-dist --locked --version 0.30.3
+          cargo install cargo-deb --locked
+          cargo install cargo-generate-rpm --locked
 
-      - name: Build (release)
-        run: cargo build --release
+      - name: Build tar.xz via dist
+        run: |
+          dist build \
+            --allow-dirty \
+            --artifacts=local \
+            --target x86_64-unknown-linux-gnu \
+            --tag "${GITHUB_REF_NAME}"
 
-      - name: Package artifact
-        shell: bash
+      - name: Build .deb
+        run: cargo deb
+
+      - name: Build .rpm
+        run: |
+          cargo build --release
+          cargo generate-rpm
+
+      - name: Collect artifacts
         run: |
           set -euo pipefail
-          BIN=tmp
-          TAG="${GITHUB_REF_NAME}"
-          TARGET_TRIPLE="x86_64-unknown-linux-gnu"
-          OUTDIR="dist"
-          mkdir -p "$OUTDIR"
 
-          # Optional: reduce size
-          strip "target/release/$BIN" || true
+          mkdir -p target/release-artifacts
 
-          ARCHIVE_NAME="terminal-music-player-${TAG}-${TARGET_TRIPLE}.tar.gz"
-          ARCHIVE_PATH="$OUTDIR/$ARCHIVE_NAME"
+          # tarballs (cargo-dist)
+          if compgen -G "target/distrib/*.tar.xz" > /dev/null; then
+            cp -v target/distrib/*.tar.xz* target/release-artifacts/
+          elif compgen -G "target/dist/*.tar.xz" > /dev/null; then
+            cp -v target/dist/*.tar.xz* target/release-artifacts/
+          else
+            echo "ERROR: couldn't find dist tarballs in target/distrib or target/dist" >&2
+            find target -maxdepth 3 -type f -name '*.tar.xz' -print || true
+            exit 1
+          fi
 
-          tar -C target/release -czf "$ARCHIVE_PATH" "$BIN"
-          (cd "$OUTDIR" && sha256sum "$ARCHIVE_NAME" > "$ARCHIVE_NAME.sha256")
+          # deb/rpm
+          cp -v target/debian/*.deb target/release-artifacts/
+          cp -v target/generate-rpm/*.rpm target/release-artifacts/
 
-          echo "ARCHIVE_PATH=$ARCHIVE_PATH" >> "$GITHUB_ENV"
-          echo "ARCHIVE_SHA=$OUTDIR/$ARCHIVE_NAME.sha256" >> "$GITHUB_ENV"
-
-      - name: Upload to GitHub Release
+      - name: Upload assets to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          files: target/release-artifacts/*
+          fail_on_unmatched_files: true
           generate_release_notes: true
-          files: |
-            ${{ env.ARCHIVE_PATH }}
-            ${{ env.ARCHIVE_SHA }}
