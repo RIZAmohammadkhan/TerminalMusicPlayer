@@ -12,12 +12,11 @@ use crossterm::{
 use signal_hook::{consts::signal::*, iterator::Signals};
 
 use crate::{
+    audio::AudioOutput,
     config::Config,
     library::{default_library_path, discover_tracks},
-    output::AudioOutput,
     player::Player,
-    shell::hide_to_shell_toggleable,
-    term::{init_terminal, TerminalCleanup},
+    term::{hide_to_shell_toggleable, init_terminal, TerminalCleanup},
     ui::{draw_ui, handle_key, UiAction, UiState},
 };
 

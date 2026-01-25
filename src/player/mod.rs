@@ -13,9 +13,8 @@ use crate::{
     audio,
     library::Track,
     meta::{self, TrackMeta},
-    output::{AudioControl, AudioOutput},
+    audio::{AudioControl, AudioOutput, VolumeControl},
     util::{make_shuffled_order, SaturatingDurationSince},
-    volume::VolumeControl,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -11,7 +11,7 @@ use crossterm::{
 };
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
-use crate::term::AppTerminal;
+use super::AppTerminal;
 
 pub(crate) fn hide_to_shell_toggleable(terminal: &mut AppTerminal) -> Result<()> {
     // We keep raw mode enabled and act like a minimal terminal multiplexer (tmux-like):

@@ -6,6 +6,9 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 
 pub(crate) type AppTerminal = Terminal<CrosstermBackend<io::Stdout>>;
 
+pub(crate) mod shell;
+pub(crate) use shell::hide_to_shell_toggleable;
+
 pub(crate) fn init_terminal() -> Result<AppTerminal> {
     terminal::enable_raw_mode().context("enable raw mode")?;
     let mut stdout = io::stdout();

@@ -6,13 +6,10 @@ mod audio;
 mod config;
 mod library;
 mod meta;
-mod output;
 mod player;
-mod shell;
 mod term;
 mod ui;
 mod util;
-mod volume;
 
 fn main() -> anyhow::Result<()> {
     app::run()
