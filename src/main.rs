@@ -19,7 +19,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use crossterm::{
     cursor,
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
+    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     terminal,
 };
 use ratatui::{
@@ -170,10 +170,6 @@ impl Player {
         self.tracks.get(self.current)
     }
 
-    fn selected_track(&self) -> Option<&Track> {
-        self.tracks.get(self.selected)
-    }
-
     fn refresh_volume(&mut self) {
         self.volume.refresh();
     }
@@ -220,16 +216,19 @@ impl Player {
             .path
             .clone();
 
-        if let Some(old) = self.sink.take() {
-            old.stop();
-        }
-
-        let sink = Sink::try_new(&self.handle).context("Failed to create audio sink")?;
-        self.volume.apply_to_sink(&sink);
-
+        // Prepare everything first. If decoding/seeking fails, keep the current sink playing.
         let meta = probe_track_meta(&track).unwrap_or_default();
         let (source, total_duration) = open_source(&track, start_pos, self.loop_current)
             .with_context(|| format!("Failed to open track: {}", track.display()))?;
+
+        let new_sink = Sink::try_new(&self.handle).context("Failed to create audio sink")?;
+        self.volume.apply_to_sink(&new_sink);
+        new_sink.append(source);
+        new_sink.play();
+
+        if let Some(old) = self.sink.replace(new_sink) {
+            old.stop();
+        }
 
         self.now_meta = meta.clone();
         self.total_duration = total_duration.or(meta.duration);
@@ -237,11 +236,6 @@ impl Player {
         self.started_at = Some(Instant::now());
         self.paused_at = None;
         self.total_pause = Duration::ZERO;
-
-        sink.append(source);
-        sink.play();
-
-        self.sink = Some(sink);
         self.state = PlayState::Playing;
         Ok(())
     }
@@ -486,6 +480,11 @@ struct UiState {
     help_scroll: u16,
     search_mode: bool,
     search_query: String,
+    move_mode: bool,
+    move_query: String,
+    move_error: Option<String>,
+    last_seek_key: Option<KeyCode>,
+    last_seek_at: Instant,
     delete_confirm: Option<DeleteConfirm>,
     last_tick: Instant,
 }
@@ -526,12 +525,16 @@ fn main() -> Result<()> {
         help_scroll: 0,
         search_mode: false,
         search_query: String::new(),
+        move_mode: false,
+        move_query: String::new(),
+        move_error: None,
+        last_seek_key: None,
+        last_seek_at: Instant::now() - Duration::from_millis(500),
         delete_confirm: None,
         last_tick: Instant::now(),
     };
 
     let tick_rate = Duration::from_millis(50);
-
     loop {
         if shutdown.load(Ordering::Relaxed) {
             player.stop_playback();
@@ -539,6 +542,7 @@ fn main() -> Result<()> {
         }
 
         player.refresh_volume();
+
         terminal.draw(|f| draw_ui(f, &player, &ui))?;
 
         // Auto-advance
@@ -568,6 +572,11 @@ fn main() -> Result<()> {
 }
 
 fn handle_key(key: KeyEvent, player: &mut Player, ui: &mut UiState) -> Result<bool> {
+    // Some terminals report key holding as Repeat, others as rapid Press.
+    // We treat Repeat as non-actionable and also apply a short cooldown for seek keys.
+    let is_press = key.kind == KeyEventKind::Press;
+    let is_repeat = key.kind == KeyEventKind::Repeat;
+
     // Ctrl+C quit
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
         player.stop_playback();
@@ -605,9 +614,76 @@ fn handle_key(key: KeyEvent, player: &mut Player, ui: &mut UiState) -> Result<bo
         return Ok(false);
     }
 
+    // Move mode captures all typing so it doesn't trigger other bindings.
+    if ui.move_mode {
+        match key.code {
+            KeyCode::Esc => {
+                ui.move_mode = false;
+                ui.move_query.clear();
+                ui.move_error = None;
+            }
+            KeyCode::Enter => {
+                match parse_timestamp(&ui.move_query) {
+                    Ok(target) => {
+                        if let Some(total) = player.total_duration {
+                            if target > total {
+                                ui.move_error = Some(format!(
+                                    "Timestamp is past track length ({}).",
+                                    fmt_time(total)
+                                ));
+                                return Ok(false);
+                            }
+                        }
+
+                        if let Err(e) = player.start_track(target) {
+                            ui.move_error = Some(format!("Failed to seek: {e}"));
+                            return Ok(false);
+                        }
+
+                        ui.move_mode = false;
+                        ui.move_query.clear();
+                        ui.move_error = None;
+                    }
+                    Err(msg) => {
+                        ui.move_error = Some(msg);
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                ui.move_query.pop();
+                ui.move_error = None;
+            }
+            KeyCode::Char(c) => {
+                if !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT)
+                {
+                    ui.move_query.push(c);
+                    ui.move_error = None;
+                }
+            }
+            _ => {}
+        }
+
+        return Ok(false);
+    }
+
     // Enter search mode.
     if key.code == KeyCode::Char('S') {
         ui.search_mode = true;
+        ui.search_query.clear();
+        ui.move_mode = false;
+        ui.move_query.clear();
+        ui.move_error = None;
+        ui.delete_confirm = None;
+        return Ok(false);
+    }
+
+    // Enter move mode.
+    if key.code == KeyCode::Char('m') {
+        ui.move_mode = true;
+        ui.move_query.clear();
+        ui.move_error = None;
+        ui.search_mode = false;
         ui.search_query.clear();
         ui.delete_confirm = None;
         return Ok(false);
@@ -711,11 +787,15 @@ fn handle_key(key: KeyEvent, player: &mut Player, ui: &mut UiState) -> Result<bo
         // Requested bindings
         KeyCode::Char('p') => {
             // 10s back
-            let _ = player.seek_relative(-10_000);
+            if is_press {
+                let _ = player.seek_relative(-10_000);
+            }
         }
         KeyCode::Char('n') => {
             // 10s forward
-            let _ = player.seek_relative(10_000);
+            if is_press {
+                let _ = player.seek_relative(10_000);
+            }
         }
         KeyCode::Char('P') => {
             let _ = player.prev_track();
@@ -724,10 +804,37 @@ fn handle_key(key: KeyEvent, player: &mut Player, ui: &mut UiState) -> Result<bo
             let _ = player.next_track();
         }
         KeyCode::Left => {
-            let _ = player.seek_relative(-5_000);
+            if is_repeat {
+                return Ok(false);
+            }
+
+            // Ignore continuous holds even if the terminal reports them as Press.
+            let cooldown = Duration::from_millis(180);
+            if ui.last_seek_key == Some(KeyCode::Left) && ui.last_seek_at.elapsed() < cooldown {
+                return Ok(false);
+            }
+
+            if is_press {
+                ui.last_seek_key = Some(KeyCode::Left);
+                ui.last_seek_at = Instant::now();
+                let _ = player.seek_relative(-5_000);
+            }
         }
         KeyCode::Right => {
-            let _ = player.seek_relative(5_000);
+            if is_repeat {
+                return Ok(false);
+            }
+
+            let cooldown = Duration::from_millis(180);
+            if ui.last_seek_key == Some(KeyCode::Right) && ui.last_seek_at.elapsed() < cooldown {
+                return Ok(false);
+            }
+
+            if is_press {
+                ui.last_seek_key = Some(KeyCode::Right);
+                ui.last_seek_at = Instant::now();
+                let _ = player.seek_relative(5_000);
+            }
         }
         KeyCode::Char('v') => {
             ui.volume_mode = !ui.volume_mode;
@@ -795,6 +902,59 @@ fn handle_key(key: KeyEvent, player: &mut Player, ui: &mut UiState) -> Result<bo
     }
 
     Ok(false)
+}
+
+fn parse_timestamp(input: &str) -> std::result::Result<Duration, String> {
+    let s = input.trim();
+    if s.is_empty() {
+        return Err("Enter a timestamp (e.g. 1:30 or 01:02:03).".to_string());
+    }
+
+    // Accept: SS, M:SS, HH:MM:SS
+    let parts: Vec<&str> = s.split(':').collect();
+    let parse_u64 = |p: &str| {
+        p.trim()
+            .parse::<u64>()
+            .map_err(|_| format!("Invalid number: '{p}'"))
+    };
+
+    let (h, m, sec) = match parts.len() {
+        1 => {
+            let sec = parse_u64(parts[0])?;
+            (0u64, 0u64, sec)
+        }
+        2 => {
+            let m = parse_u64(parts[0])?;
+            let sec = parse_u64(parts[1])?;
+            (0u64, m, sec)
+        }
+        3 => {
+            let h = parse_u64(parts[0])?;
+            let m = parse_u64(parts[1])?;
+            let sec = parse_u64(parts[2])?;
+            (h, m, sec)
+        }
+        _ => {
+            return Err(
+                "Invalid timestamp format. Use SS, M:SS, or HH:MM:SS (e.g. 1:30, 01:02:03)."
+                    .to_string(),
+            );
+        }
+    };
+
+    if parts.len() >= 2 && sec >= 60 {
+        return Err("Seconds must be 0..59 (use M:SS / HH:MM:SS).".to_string());
+    }
+    if parts.len() == 3 && m >= 60 {
+        return Err("Minutes must be 0..59 in HH:MM:SS.".to_string());
+    }
+
+    let total_secs = h
+        .saturating_mul(3600)
+        .saturating_add(m.saturating_mul(60))
+        .saturating_add(sec);
+
+    Ok(Duration::from_secs(total_secs))
 }
 
 fn init_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
@@ -1016,41 +1176,65 @@ fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState) {
 
     f.render_stateful_widget(list, left[0], &mut state);
 
-    let search_text = if ui.search_mode {
-        if ui.search_query.is_empty() {
-            "Type to search…".to_string()
+    let (box_title, box_border, box_style, box_text) = if ui.move_mode {
+        let input = if ui.move_query.is_empty() {
+            "Type a timestamp (e.g. 1:30)".to_string()
         } else {
-            ui.search_query.clone()
-        }
+            ui.move_query.clone()
+        };
+
+        let text = if let Some(err) = &ui.move_error {
+            Text::from(vec![
+                Line::styled(err.clone(), Style::default().fg(Color::Red)),
+                Line::raw(input),
+            ])
+        } else {
+            Text::from(input)
+        };
+
+        (
+            "Move",
+            Color::Yellow,
+            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            text,
+        )
     } else {
-        "Press S to search".to_string()
+        let text = if ui.search_mode {
+            if ui.search_query.is_empty() {
+                Text::from("Type to search…".to_string())
+            } else {
+                Text::from(ui.search_query.clone())
+            }
+        } else {
+            Text::from("Press S to search".to_string())
+        };
+
+        let style = if ui.search_mode {
+            Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        ("Search", Color::Magenta, style, text)
     };
 
-    let search_style = if ui.search_mode {
-        Style::default()
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-
-    let search_widget = Paragraph::new(search_text)
-        .style(search_style)
+    let input_widget = Paragraph::new(box_text)
+        .style(box_style)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(Color::Magenta))
+                .border_style(Style::default().fg(box_border))
                 .title(Title::from(Line::styled(
-                    "Search",
+                    box_title,
                     Style::default()
-                        .fg(Color::Magenta)
+                        .fg(box_border)
                         .add_modifier(Modifier::BOLD),
                 ))),
         )
         .wrap(Wrap { trim: true });
 
-    f.render_widget(search_widget, left[1]);
+    f.render_widget(input_widget, left[1]);
 
     // Now playing
     let right = Layout::default()
@@ -1229,6 +1413,17 @@ fn hints_lines(player: &Player, ui: &UiState) -> Vec<Line<'static>> {
         ])];
     }
 
+    if ui.move_mode {
+        return vec![Line::from(vec![
+            Span::styled("Enter", key),
+            Span::raw(" jump • "),
+            Span::styled("Esc", key),
+            Span::raw(" cancel • "),
+            Span::styled("Backspace", key),
+            Span::raw(" delete"),
+        ])];
+    }
+
     if let Some(confirm) = &ui.delete_confirm {
         if confirm.started_at.elapsed() <= Duration::from_millis(2500) {
             let name = player
@@ -1273,6 +1468,8 @@ fn hints_lines(player: &Player, ui: &UiState) -> Vec<Line<'static>> {
         Span::raw(" volume mode • "),
         Span::styled("S", key),
         Span::raw(" search • "),
+        Span::styled("m", key),
+        Span::raw(" move • "),
         Span::styled("D", key),
         Span::raw(" delete"),
     ])]
@@ -1399,6 +1596,7 @@ fn help_text(ui: &UiState) -> String {
         "  q           quit",
         "  s           toggle shuffle order",
         "  S           search library (type to select)",
+        "  m           move to timestamp (e.g. 1:30)",
         "  D           delete selected track (press twice)",
         "  ↑/↓         scroll (PgUp/PgDn, Home/End)",
         "",
@@ -1475,16 +1673,13 @@ fn draw_help_overlay(f: &mut Frame, player: &Player, ui: &UiState) {
     let mut block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .title(Title::from(base_header))
+        .title_top(base_header)
         .style(Style::default().fg(Color::White));
 
     if !indicator.is_empty() {
-        block = block.title(
-            Title::from(Line::styled(
-                indicator,
-                Style::default().fg(Color::DarkGray),
-            ))
-            .alignment(Alignment::Right),
+        block = block.title_bottom(
+            Line::styled(indicator, Style::default().fg(Color::DarkGray))
+                .alignment(Alignment::Right),
         );
     }
 
@@ -1660,29 +1855,5 @@ impl SaturatingDurationSince for Instant {
         } else {
             Duration::ZERO
         }
-    }
-}
-
-trait SaturatingSub {
-    fn saturating_sub(self, other: Duration) -> Duration;
-}
-
-impl SaturatingSub for Duration {
-    fn saturating_sub(self, other: Duration) -> Duration {
-        if self >= other {
-            self - other
-        } else {
-            Duration::ZERO
-        }
-    }
-}
-
-trait SaturatingAdd {
-    fn saturating_add(self, other: Duration) -> Duration;
-}
-
-impl SaturatingAdd for Duration {
-    fn saturating_add(self, other: Duration) -> Duration {
-        self.checked_add(other).unwrap_or(Duration::MAX)
     }
 }

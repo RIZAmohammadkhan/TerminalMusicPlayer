@@ -1,5 +1,4 @@
 ## Areas of improvement in v0.2.0
-
 1. **Scalabilty and performace**
 Synchronous Scanning: The discover_tracks function runs on the main thread before the UI starts. If a user points this at a library with 50,000 songs, the app will hang at startup until the scan finishes.
 Memory Usage: You load all Track structs into a Vec. While fine for 99% of users, this isn't optimized for massive libraries (no lazy loading or database).
@@ -166,3 +165,4 @@ Track {
 // No allocation here! Just a slice check.
 if t.lower_name.contains(&q) { ... }
 Effect: Searching becomes "Zero Allocation." Extremely CPU efficient.
+

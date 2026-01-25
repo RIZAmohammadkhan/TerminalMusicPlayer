@@ -119,12 +119,13 @@ Trix is designed to be used entirely without a mouse.
 | `s` | Toggle **Shuffle** |
 | `r` | Restart current track |
 | **Seeking** | |
-| `→` | Seek forward 5s |
-| `←` | Seek backward 5s |
+| `→` | Seek forward 5s (per press) |
+| `←` | Seek backward 5s (per press) |
 | `n` | Seek forward 10s |
 | `p` | Seek backward 10s |
 | **Utility** | |
 | `S` | **Search** mode (Type to filter, `Enter` to play) |
+| `m` | **Move** to timestamp (e.g. `1:30`, `01:02:03`) |
 | `v` | **Volume** mode (Use `↑`/`↓` to adjust, `v`/`Esc` to exit) |
 | `D` | **Delete** track (Press twice to confirm) |
 | `h` / `?` | Toggle **Help** / Cheatsheet |

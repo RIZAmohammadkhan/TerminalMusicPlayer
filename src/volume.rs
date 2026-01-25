@@ -53,10 +53,6 @@ impl VolumeControl {
         self.display
     }
 
-    pub fn app_gain(&self) -> f32 {
-        self.app_gain
-    }
-
     pub fn refresh(&mut self) {
         // Avoid hammering the system backend every frame.
         let min_period = Duration::from_millis(150);
