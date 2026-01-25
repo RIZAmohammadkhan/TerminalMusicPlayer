@@ -28,7 +28,7 @@ use ratatui::{
     widgets::block::Title,
     widgets::{Block, BorderType, Borders, Clear, Gauge, List, ListItem, Paragraph, Wrap},
 };
-use rodio::{OutputStream, OutputStreamHandle, Sink, Source};
+use rodio::Source;
 use symphonia::core::{
     formats::FormatOptions,
     io::MediaSourceStream,
@@ -38,11 +38,13 @@ use symphonia::core::{
 };
 use walkdir::WalkDir;
 
-use signal_hook::{consts::signal::*, flag as signal_flag};
+use signal_hook::{consts::signal::*, iterator::Signals};
 
 mod audio;
+mod output;
 mod volume;
 use volume::VolumeControl;
+use output::{AudioControl, AudioOutput};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
@@ -80,9 +82,8 @@ struct TrackMeta {
 }
 
 struct Player {
-    _stream: OutputStream,
-    handle: OutputStreamHandle,
-    sink: Option<Sink>,
+    audio: AudioOutput,
+    audio_ctl: AudioControl,
 
     tracks: Vec<Track>,
     current: usize,
@@ -108,16 +109,18 @@ struct Player {
 }
 
 impl Player {
-    fn new(tracks: Vec<Track>, start_index: usize) -> Result<Self> {
-        let (stream, handle) =
-            OutputStream::try_default().context("Failed to open audio output")?;
+    fn new(
+        tracks: Vec<Track>,
+        start_index: usize,
+        audio: AudioOutput,
+    ) -> Result<Self> {
+        let audio_ctl = audio.control();
 
         let start_index = min(start_index, tracks.len().saturating_sub(1));
         let play_order: Vec<usize> = (0..tracks.len()).collect();
         Ok(Self {
-            _stream: stream,
-            handle,
-            sink: None,
+            audio,
+            audio_ctl,
             tracks,
             current: start_index,
             selected: start_index,
@@ -173,10 +176,12 @@ impl Player {
 
     fn refresh_volume(&mut self) {
         self.volume.refresh();
+        self.audio_ctl.set_gain(self.volume.app_gain_scalar());
     }
 
     fn adjust_volume(&mut self, delta: f32) {
-        self.volume.adjust(self.sink.as_ref(), delta);
+        self.volume.adjust(delta);
+        self.audio_ctl.set_gain(self.volume.app_gain_scalar());
     }
 
     fn play_selected(&mut self) -> Result<()> {
@@ -222,14 +227,11 @@ impl Player {
         let (source, total_duration) = open_source(&track, start_pos, self.loop_current)
             .with_context(|| format!("Failed to open track: {}", track.display()))?;
 
-        let new_sink = Sink::try_new(&self.handle).context("Failed to create audio sink")?;
-        self.volume.apply_to_sink(&new_sink);
-        new_sink.append(source);
-        new_sink.play();
-
-        if let Some(old) = self.sink.replace(new_sink) {
-            old.stop();
-        }
+        // Ensure app gain is applied in the callback.
+        self.audio_ctl.set_gain(self.volume.app_gain_scalar());
+        self.audio_ctl.set_paused(false);
+        self.audio_ctl
+            .set_source(source, self.audio.channels, self.audio.sample_rate);
 
         self.now_meta = meta.clone();
         self.total_duration = total_duration.or(meta.duration);
@@ -242,18 +244,14 @@ impl Player {
     }
 
     fn toggle_pause(&mut self) {
-        let Some(sink) = &self.sink else {
-            return;
-        };
-
         match self.state {
             PlayState::Playing => {
-                sink.pause();
+                self.audio_ctl.set_paused(true);
                 self.state = PlayState::Paused;
                 self.paused_at = Some(Instant::now());
             }
             PlayState::Paused => {
-                sink.play();
+                self.audio_ctl.set_paused(false);
                 self.state = PlayState::Playing;
                 if let Some(paused_at) = self.paused_at.take() {
                     self.total_pause += paused_at.elapsed();
@@ -266,9 +264,9 @@ impl Player {
     }
 
     fn stop_playback(&mut self) {
-        if let Some(old) = self.sink.take() {
-            old.stop();
-        }
+        self.audio_ctl.stop_now();
+        self.audio_ctl.set_paused(false);
+
         self.state = PlayState::Stopped;
         self.started_at = None;
         self.paused_at = None;
@@ -276,10 +274,7 @@ impl Player {
     }
 
     fn is_track_finished(&self) -> bool {
-        match (&self.sink, self.state) {
-            (Some(sink), PlayState::Playing) => sink.empty(),
-            _ => false,
-        }
+        self.state == PlayState::Playing && self.audio_ctl.take_finished()
     }
 
     fn next_track(&mut self) -> Result<()> {
@@ -398,9 +393,7 @@ impl Player {
         }
 
         if deleting_current {
-            if let Some(old) = self.sink.take() {
-                old.stop();
-            }
+            self.audio_ctl.stop_now();
             self.state = PlayState::Stopped;
             self.loop_current = false;
             self.base_pos = Duration::ZERO;
@@ -449,6 +442,14 @@ impl Player {
     }
 }
 
+impl Drop for Player {
+    fn drop(&mut self) {
+        // Make best-effort to stop audio immediately on any exit path.
+        // (E.g. terminal closed -> SIGHUP, or event I/O error.)
+        self.stop_playback();
+    }
+}
+
 fn open_source(
     path: &Path,
     start_pos: Duration,
@@ -488,15 +489,34 @@ fn main() -> Result<()> {
 
     let library_path = args.path.unwrap_or_else(default_library_path);
 
-    // Handle SIGINT/SIGTERM/etc. so we can restore terminal state.
+    // Low-latency audio output (small fixed buffers) so stop is immediate.
+    let audio = AudioOutput::new_low_latency().context("Failed to initialize audio output")?;
+    let audio_ctl = audio.control();
+
+    // Handle SIGINT/SIGTERM/SIGHUP promptly.
+    // Stop audio directly from the signal thread to avoid waiting for the UI tick.
     let shutdown = Arc::new(AtomicBool::new(false));
-    for sig in [SIGINT, SIGTERM, SIGHUP, SIGQUIT] {
-        signal_flag::register(sig, Arc::clone(&shutdown))
-            .with_context(|| format!("register signal handler for {sig}"))?;
+    {
+        let shutdown = Arc::clone(&shutdown);
+        let audio_ctl = audio_ctl.clone();
+        let mut signals = Signals::new([SIGINT, SIGTERM, SIGHUP, SIGQUIT])
+            .context("Failed to create signal watcher")?;
+
+        std::thread::spawn(move || {
+            for sig in signals.forever() {
+                shutdown.store(true, Ordering::Relaxed);
+                audio_ctl.shutdown_now();
+                // Terminal close should behave like a clean quit.
+                // We don't call process::exit so terminal cleanup can still run.
+                if sig == SIGHUP {
+                    // nothing else to do here
+                }
+            }
+        });
     }
 
     let tracks = discover_tracks(&library_path)?;
-    let mut player = Player::new(tracks, args.index)?;
+    let mut player = Player::new(tracks, args.index, audio)?;
 
     // Auto-start first track if any
     if player.has_tracks() {
@@ -523,13 +543,19 @@ fn main() -> Result<()> {
     let tick_rate = Duration::from_millis(50);
     loop {
         if shutdown.load(Ordering::Relaxed) {
+            audio_ctl.shutdown_now();
             player.stop_playback();
             break;
         }
 
         player.refresh_volume();
 
-        terminal.draw(|f| draw_ui(f, &player, &ui))?;
+        if terminal.draw(|f| draw_ui(f, &player, &ui)).is_err() {
+            // Terminal likely closed (broken pipe / pty hangup). Treat as a clean quit.
+            audio_ctl.shutdown_now();
+            player.stop_playback();
+            break;
+        }
 
         // Auto-advance
         if !player.loop_current && player.is_track_finished() {
@@ -540,8 +566,32 @@ fn main() -> Result<()> {
             .checked_sub(ui.last_tick.elapsed())
             .unwrap_or(Duration::ZERO);
 
-        if event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
+        let polled = match event::poll(timeout) {
+            Ok(v) => v,
+            Err(_) => {
+                audio_ctl.shutdown_now();
+                player.stop_playback();
+                break;
+            }
+        };
+
+        if polled {
+            if shutdown.load(Ordering::Relaxed) {
+                audio_ctl.shutdown_now();
+                player.stop_playback();
+                break;
+            }
+
+            let ev = match event::read() {
+                Ok(v) => v,
+                Err(_) => {
+                    audio_ctl.shutdown_now();
+                    player.stop_playback();
+                    break;
+                }
+            };
+
+            if let Event::Key(key) = ev {
                 if handle_key(key, &mut player, &mut ui)? {
                     break;
                 }

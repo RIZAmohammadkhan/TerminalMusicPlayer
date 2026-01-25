@@ -78,14 +78,17 @@ impl VolumeControl {
         }
     }
 
-    pub fn apply_to_sink(&self, sink: &rodio::Sink) {
+    /// Scalar to apply to samples when using per-app gain.
+    ///
+    /// When using system volume, this returns 1.0.
+    pub fn app_gain_scalar(&self) -> f32 {
         match &self.backend {
-            Backend::System(_) => sink.set_volume(1.0),
-            Backend::AppGain => sink.set_volume(self.app_gain),
+            Backend::System(_) => 1.0,
+            Backend::AppGain => self.app_gain,
         }
     }
 
-    pub fn adjust(&mut self, sink: Option<&rodio::Sink>, delta: f32) {
+    pub fn adjust(&mut self, delta: f32) {
         match &mut self.backend {
             Backend::System(sys) => {
                 // System volume is normalized 0..=1.
@@ -93,7 +96,7 @@ impl VolumeControl {
                 let next = (current + delta).clamp(0.0, 1.0);
                 if let Err(_) = sys.set(next) {
                     self.fallback_to_app_gain();
-                    self.adjust(sink, delta);
+                    self.adjust(delta);
                     return;
                 }
                 self.display = next;
@@ -101,17 +104,11 @@ impl VolumeControl {
 
                 // Keep app gain at unity when we're controlling system volume.
                 self.app_gain = 1.0;
-                if let Some(s) = sink {
-                    s.set_volume(1.0);
-                }
             }
             Backend::AppGain => {
                 self.app_gain = (self.app_gain + delta).clamp(0.0, 1.5);
                 self.display = self.app_gain;
                 self.display_label = "App gain";
-                if let Some(s) = sink {
-                    s.set_volume(self.app_gain);
-                }
             }
         }
     }
