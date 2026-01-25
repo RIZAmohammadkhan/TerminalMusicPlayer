@@ -41,10 +41,12 @@ use walkdir::WalkDir;
 use signal_hook::{consts::signal::*, iterator::Signals};
 
 mod audio;
+mod config;
 mod output;
 mod volume;
 use volume::VolumeControl;
 use output::{AudioControl, AudioOutput};
+use config::{Config, Theme};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
@@ -487,6 +489,9 @@ fn main() -> Result<()> {
 
     let args = Args::parse();
 
+    let config = Config::load();
+    let theme = config.theme;
+
     let library_path = args.path.unwrap_or_else(default_library_path);
 
     // Low-latency audio output (small fixed buffers) so stop is immediate.
@@ -550,7 +555,7 @@ fn main() -> Result<()> {
 
         player.refresh_volume();
 
-        if terminal.draw(|f| draw_ui(f, &player, &ui)).is_err() {
+        if terminal.draw(|f| draw_ui(f, &player, &ui, &theme)).is_err() {
             // Terminal likely closed (broken pipe / pty hangup). Treat as a clean quit.
             audio_ctl.shutdown_now();
             player.stop_playback();
@@ -1127,7 +1132,7 @@ fn is_audio_file(path: &Path) -> bool {
     )
 }
 
-fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState) {
+fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Theme) {
     let area = f.area();
 
     let root = Layout::default()
@@ -1139,7 +1144,7 @@ fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState) {
     let title_widget = Paragraph::new(title)
         .style(
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme.title_accent)
                 .add_modifier(Modifier::BOLD),
         )
         .block(
@@ -1167,14 +1172,14 @@ fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState) {
         .enumerate()
         .map(|(i, t)| {
             let (prefix, prefix_style) = if i == player.current {
-                ("▶ ", Style::default().fg(Color::Green))
+                ("▶ ", Style::default().fg(theme.playing_indicator))
             } else {
                 ("  ", Style::default())
             };
 
             let name_style = if i == player.current {
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(theme.current_track_accent)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
@@ -1195,17 +1200,17 @@ fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(Color::Yellow))
+                .border_style(Style::default().fg(theme.library_accent))
                 .title(Title::from(Line::styled(
                     "Library",
                     Style::default()
-                        .fg(Color::Yellow)
+                    .fg(theme.library_accent)
                         .add_modifier(Modifier::BOLD),
                 ))),
         )
         .highlight_style(
             Style::default()
-                .fg(Color::Yellow)
+                .fg(theme.library_accent)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("» ");
@@ -1221,7 +1226,7 @@ fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState) {
 
         let text = if let Some(err) = &ui.move_error {
             Text::from(vec![
-                Line::styled(err.clone(), Style::default().fg(Color::Red)),
+                Line::styled(err.clone(), Style::default().fg(theme.error)),
                 Line::raw(input),
             ])
         } else {
@@ -1230,8 +1235,8 @@ fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState) {
 
         (
             "Move",
-            Color::Yellow,
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            theme.move_accent,
+            Style::default().fg(theme.text_primary).add_modifier(Modifier::BOLD),
             text,
         )
     } else {
@@ -1246,12 +1251,12 @@ fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState) {
         };
 
         let style = if ui.search_mode {
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+            Style::default().fg(theme.text_primary).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(theme.text_muted)
         };
 
-        ("Search", Color::Magenta, style, text)
+        ("Search", theme.search_accent, style, text)
     };
 
     let input_widget = Paragraph::new(box_text)
@@ -1282,18 +1287,18 @@ fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState) {
         ])
         .split(mid[1]);
 
-    let now_playing = now_playing_lines(player, ui);
+    let now_playing = now_playing_lines(player, ui, theme);
     let now_widget = Paragraph::new(Text::from(now_playing))
         .wrap(Wrap { trim: true })
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(Color::Cyan))
+                .border_style(Style::default().fg(theme.now_accent))
                 .title(Title::from(Line::styled(
                     "Now",
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(theme.now_accent)
                         .add_modifier(Modifier::BOLD),
                 ))),
         );
@@ -1305,45 +1310,47 @@ fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(Color::Green))
+                .border_style(Style::default().fg(theme.progress_accent))
                 .title(Title::from(Line::styled(
                     "Progress",
                     Style::default()
-                        .fg(Color::Green)
+                        .fg(theme.progress_accent)
                         .add_modifier(Modifier::BOLD),
                 ))),
         )
         .gauge_style(
             Style::default()
-                .fg(Color::Green)
+                .fg(theme.progress_accent)
                 .add_modifier(Modifier::BOLD),
         )
         .ratio(ratio)
         .label(Span::styled(
             label,
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.text_primary)
+                .add_modifier(Modifier::BOLD),
         ));
     f.render_widget(gauge, right[1]);
 
-    let hints = hints_lines(player, ui);
+    let hints = hints_lines(player, ui, theme);
     let help_widget = Paragraph::new(Text::from(hints))
         .wrap(Wrap { trim: true })
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(Color::Blue))
+                .border_style(Style::default().fg(theme.hints_accent))
                 .title(Title::from(Line::styled(
                     "Hints",
                     Style::default()
-                        .fg(Color::Blue)
+                        .fg(theme.hints_accent)
                         .add_modifier(Modifier::BOLD),
                 ))),
         );
     f.render_widget(help_widget, right[2]);
 
     if ui.show_help {
-        draw_help_overlay(f, player, ui);
+        draw_help_overlay(f, player, ui, theme);
     }
 }
 
@@ -1367,7 +1374,7 @@ fn title_line(player: &Player, ui: &UiState) -> String {
     format!("State: {state} • Volume: {vol} [{backend}]{chord}{lp}{sh}")
 }
 
-fn now_playing_lines(player: &Player, _ui: &UiState) -> Vec<Line<'static>> {
+fn now_playing_lines(player: &Player, _ui: &UiState, theme: &Theme) -> Vec<Line<'static>> {
     let name = player
         .current_track()
         .map(|t| t.display_name.as_str())
@@ -1392,9 +1399,9 @@ fn now_playing_lines(player: &Player, _ui: &UiState) -> Vec<Line<'static>> {
         .filter(|s| !s.trim().is_empty())
         .unwrap_or("-");
 
-    let key = key_style();
+    let key = key_style(theme);
     let title_style = Style::default()
-        .fg(Color::Yellow)
+        .fg(theme.song_title_accent)
         .add_modifier(Modifier::BOLD);
 
     vec![
@@ -1426,20 +1433,20 @@ fn now_playing_lines(player: &Player, _ui: &UiState) -> Vec<Line<'static>> {
     ]
 }
 
-fn key_style() -> Style {
+fn key_style(theme: &Theme) -> Style {
     Style::default()
-        .fg(Color::Magenta)
+        .fg(theme.key_accent)
         .add_modifier(Modifier::BOLD)
 }
 
-fn heading_style() -> Style {
+fn heading_style(theme: &Theme) -> Style {
     Style::default()
-        .fg(Color::Cyan)
+        .fg(theme.title_accent)
         .add_modifier(Modifier::BOLD)
 }
 
-fn hints_lines(player: &Player, ui: &UiState) -> Vec<Line<'static>> {
-    let key = key_style();
+fn hints_lines(player: &Player, ui: &UiState, theme: &Theme) -> Vec<Line<'static>> {
+    let key = key_style(theme);
 
     if ui.search_mode {
         return vec![Line::from(vec![
@@ -1474,7 +1481,7 @@ fn hints_lines(player: &Player, ui: &UiState) -> Vec<Line<'static>> {
                 Span::raw("Press "),
                 Span::styled("D", key),
                 Span::raw(" again to delete: "),
-                Span::styled(name.to_string(), Style::default().fg(Color::Yellow)),
+                Span::styled(name.to_string(), Style::default().fg(theme.song_title_accent)),
                 Span::raw(" • "),
                 Span::styled("Esc", key),
                 Span::raw(" cancel"),
@@ -1681,7 +1688,7 @@ fn apply_search_selection(player: &mut Player, query: &str) {
     }
 }
 
-fn draw_help_overlay(f: &mut Frame, player: &Player, ui: &UiState) {
+fn draw_help_overlay(f: &mut Frame, player: &Player, ui: &UiState, theme: &Theme) {
     let area = f.area();
     let overlay = help_overlay_rect(area);
 
@@ -1713,20 +1720,21 @@ fn draw_help_overlay(f: &mut Frame, player: &Player, ui: &UiState) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .title_top(base_header)
-        .style(Style::default().fg(Color::White));
+        .style(Style::default().fg(theme.text_primary));
 
     if !indicator.is_empty() {
         block = block.title_bottom(
-            Line::styled(indicator, Style::default().fg(Color::DarkGray))
+            Line::styled(indicator, Style::default().fg(theme.text_muted))
                 .alignment(Alignment::Right),
         );
     }
 
-    let styled_lines: Vec<Line<'static>> = lines.into_iter().map(stylize_help_line).collect();
+    let styled_lines: Vec<Line<'static>> =
+        lines.into_iter().map(|l| stylize_help_line(l, theme)).collect();
     let p = Paragraph::new(Text::from(styled_lines))
         .block(block)
         .scroll((scroll, 0))
-        .style(Style::default().fg(Color::White));
+        .style(Style::default().fg(theme.text_primary));
 
     f.render_widget(p, overlay);
 }
@@ -1804,17 +1812,17 @@ fn help_wrapped_lines(ui: &UiState, width: u16) -> Vec<String> {
     out
 }
 
-fn stylize_help_line(line: String) -> Line<'static> {
+fn stylize_help_line(line: String, theme: &Theme) -> Line<'static> {
     if line.trim().is_empty() {
         return Line::from(Span::raw(""));
     }
 
     // Section heading (no indentation)
     if !line.starts_with(' ') {
-        return Line::from(Span::styled(line, heading_style()));
+        return Line::from(Span::styled(line, heading_style(theme)));
     }
 
-    let key = key_style();
+    let key = key_style(theme);
     let indent_len = line.chars().take_while(|c| *c == ' ').count();
     let indent = " ".repeat(indent_len);
     let trimmed = line[indent_len..].to_string();
@@ -1838,7 +1846,7 @@ fn stylize_help_line(line: String) -> Line<'static> {
         let left = trimmed[..at].trim_end().to_string();
         let right = trimmed[at..].trim().to_string();
         let left_style = if left.trim_start().starts_with('(') {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(theme.text_muted)
         } else {
             key
         };

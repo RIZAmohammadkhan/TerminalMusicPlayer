@@ -99,6 +99,50 @@ By default, Trix looks for music in your XDG Music directory (usually `~/Music`)
 trix /path/to/my/songs
 ```
 
+## ⚙️ Configuration
+
+Trix can load a user config file from:
+
+- `$XDG_CONFIG_HOME/trix/config.toml`
+- or (fallback) `~/.config/trix/config.toml`
+
+Currently this is focused on theming colors.
+
+### Theme colors
+
+Color values can be basic names (e.g. `"cyan"`, `"dark_gray"`) or hex RGB (e.g. `"#7aa2f7"`).
+
+Important semantic constraint:
+
+- `theme.library_accent` is used for both the **Library** frame and the **selection highlight**.
+	This is intentional so you can't configure the UI into a confusing state where “library color” and
+	“selection color” drift apart.
+
+Example `~/.config/trix/config.toml`:
+
+```toml
+[theme]
+title_accent = "#7aa2f7"
+current_track_accent = "#7aa2f7"
+playing_indicator = "#9ece6a"
+
+# Single knob: library frame + selection highlight
+library_accent = "#e0af68"
+
+now_accent = "#7aa2f7"
+progress_accent = "#9ece6a"
+hints_accent = "#7dcfff"
+search_accent = "#bb9af7"
+move_accent = "#e0af68"
+
+key_accent = "#bb9af7"
+song_title_accent = "#e0af68"
+
+text_primary = "white"
+text_muted = "dark_gray"
+error = "red"
+```
+
 ### Keyboard Controls
 
 Trix is designed to be used entirely without a mouse.
