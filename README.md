@@ -19,6 +19,12 @@
 
 ![Trix Player Screenshot](assets/image.png)
 
+## 🎬 Demo
+
+<video src="assets/demo.mp4" controls muted playsinline style="max-width: 100%; height: auto;"></video>
+
+Direct link: [assets/demo.mp4](assets/demo.mp4)
+
 ## ✨ Features
 
 *   **Format Support:** MP3, FLAC, WAV, OGG, M4A, AAC, Opus.
