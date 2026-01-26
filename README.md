@@ -21,7 +21,7 @@
 
 ## 🎬 Demo
 
-<video src="assets/demo.mp4" controls muted playsinline style="max-width: 100%; height: auto;"></video>
+[![Watch the demo](assets/image.png)](assets/demo.mp4)
 
 Direct link: [assets/demo.mp4](assets/demo.mp4)
 
@@ -201,6 +201,7 @@ Contributions are welcome! Feel free to open issues for bugs or feature requests
 
 ## Known Bugs
 1. closing terminal results in 1 second lag of audio closure
+2. colors don't work properly need more standardization instead of terminal specific
 
 ## 📄 License
 
