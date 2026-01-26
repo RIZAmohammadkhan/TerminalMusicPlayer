@@ -17,12 +17,9 @@
 
 **Trix** is a lightweight, high-performance music player built with Rust. It is designed for Linux users who prefer the terminal, offering a clean TUI (Terminal User Interface), robust keyboard navigation (vim-like), and low resource usage.
 
-![Trix Player Screenshot](assets/image.png)
-
-## 🎬 Demo
-
 [![Watch the demo](assets/image.png)](assets/demo.mp4)
 
+## 🎬 Demo
 Direct link: [assets/demo.mp4](assets/demo.mp4)
 
 ## ✨ Features
