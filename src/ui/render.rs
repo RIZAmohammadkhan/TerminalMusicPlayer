@@ -18,6 +18,12 @@ use super::input::UiState;
 pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Theme) {
     let area = f.area();
 
+    // Fill the entire frame with the theme background so the UI is consistent across terminals.
+    f.render_widget(
+        Block::default().style(Style::default().bg(theme.background)),
+        area,
+    );
+
     let root = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(3), Constraint::Min(0)])
@@ -28,12 +34,14 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
         .style(
             Style::default()
                 .fg(theme.title_accent)
+                .bg(theme.background)
                 .add_modifier(Modifier::BOLD),
         )
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
+                .style(Style::default().bg(theme.background))
                 .title("Terminal Music Player"),
         );
     f.render_widget(title_widget, root[0]);
@@ -55,17 +63,21 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
         .enumerate()
         .map(|(i, t)| {
             let (prefix, prefix_style) = if i == player.current {
-                ("▶ ", Style::default().fg(theme.playing_indicator))
+                (
+                    "▶ ",
+                    Style::default().fg(theme.playing_indicator).bg(theme.background),
+                )
             } else {
-                ("  ", Style::default())
+                ("  ", Style::default().fg(theme.text_primary).bg(theme.background))
             };
 
             let name_style = if i == player.current {
                 Style::default()
                     .fg(theme.current_track_accent)
+                    .bg(theme.background)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default()
+                Style::default().fg(theme.text_primary).bg(theme.background)
             };
 
             ListItem::new(Line::from(vec![
@@ -79,21 +91,25 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
     state.select(Some(player.selected));
 
     let list = List::new(items)
+        .style(Style::default().fg(theme.text_primary).bg(theme.background))
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(theme.library_accent))
+                .style(Style::default().bg(theme.background))
                 .title(Title::from(Line::styled(
                     "Library",
                     Style::default()
                         .fg(theme.library_accent)
+                        .bg(theme.background)
                         .add_modifier(Modifier::BOLD),
                 ))),
         )
         .highlight_style(
             Style::default()
                 .fg(theme.library_accent)
+                .bg(theme.background)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("» ");
@@ -109,7 +125,10 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
 
         let text = if let Some(err) = &ui.move_error {
             Text::from(vec![
-                Line::styled(err.clone(), Style::default().fg(theme.error)),
+                Line::styled(
+                    err.clone(),
+                    Style::default().fg(theme.error).bg(theme.background),
+                ),
                 Line::raw(input),
             ])
         } else {
@@ -119,7 +138,10 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
         (
             "Move",
             theme.move_accent,
-            Style::default().fg(theme.text_primary).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.text_primary)
+                .bg(theme.background)
+                .add_modifier(Modifier::BOLD),
             text,
         )
     } else {
@@ -134,9 +156,12 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
         };
 
         let style = if ui.search_mode {
-            Style::default().fg(theme.text_primary).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(theme.text_primary)
+                .bg(theme.background)
+                .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(theme.text_muted)
+            Style::default().fg(theme.text_muted).bg(theme.background)
         };
 
         ("Search", theme.search_accent, style, text)
@@ -149,9 +174,13 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(box_border))
+                .style(Style::default().bg(theme.background))
                 .title(Title::from(Line::styled(
                     box_title,
-                    Style::default().fg(box_border).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(box_border)
+                        .bg(theme.background)
+                        .add_modifier(Modifier::BOLD),
                 ))),
         )
         .wrap(Wrap { trim: true });
@@ -171,14 +200,19 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
     let now_playing = now_playing_lines(player, ui, theme);
     let now_widget = Paragraph::new(Text::from(now_playing))
         .wrap(Wrap { trim: true })
+        .style(Style::default().fg(theme.text_primary).bg(theme.background))
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(theme.now_accent))
+                .style(Style::default().bg(theme.background))
                 .title(Title::from(Line::styled(
                     "Now",
-                    Style::default().fg(theme.now_accent).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(theme.now_accent)
+                        .bg(theme.background)
+                        .add_modifier(Modifier::BOLD),
                 ))),
         );
     f.render_widget(now_widget, right[0]);
@@ -190,16 +224,19 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(theme.progress_accent))
+                .style(Style::default().bg(theme.background))
                 .title(Title::from(Line::styled(
                     "Progress",
                     Style::default()
                         .fg(theme.progress_accent)
+                        .bg(theme.background)
                         .add_modifier(Modifier::BOLD),
                 ))),
         )
         .gauge_style(
             Style::default()
                 .fg(theme.progress_accent)
+                .bg(theme.background)
                 .add_modifier(Modifier::BOLD),
         )
         .ratio(ratio)
@@ -207,6 +244,7 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
             label,
             Style::default()
                 .fg(theme.text_primary)
+                .bg(theme.background)
                 .add_modifier(Modifier::BOLD),
         ));
     f.render_widget(gauge, right[1]);
@@ -214,15 +252,18 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
     let hints = hints_lines(player, ui, theme);
     let help_widget = Paragraph::new(Text::from(hints))
         .wrap(Wrap { trim: true })
+        .style(Style::default().fg(theme.text_primary).bg(theme.background))
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(theme.hints_accent))
+                .style(Style::default().bg(theme.background))
                 .title(Title::from(Line::styled(
                     "Hints",
                     Style::default()
                         .fg(theme.hints_accent)
+                        .bg(theme.background)
                         .add_modifier(Modifier::BOLD),
                 ))),
         );
@@ -277,6 +318,7 @@ fn now_playing_lines(player: &Player, _ui: &UiState, theme: &Theme) -> Vec<Line<
     let key = key_style(theme);
     let title_style = Style::default()
         .fg(theme.song_title_accent)
+        .bg(theme.background)
         .add_modifier(Modifier::BOLD);
 
     vec![
@@ -307,12 +349,14 @@ fn now_playing_lines(player: &Player, _ui: &UiState, theme: &Theme) -> Vec<Line<
 fn key_style(theme: &Theme) -> Style {
     Style::default()
         .fg(theme.key_accent)
+    .bg(theme.background)
         .add_modifier(Modifier::BOLD)
 }
 
 fn heading_style(theme: &Theme) -> Style {
     Style::default()
         .fg(theme.title_accent)
+    .bg(theme.background)
         .add_modifier(Modifier::BOLD)
 }
 
@@ -352,7 +396,12 @@ fn hints_lines(player: &Player, ui: &UiState, theme: &Theme) -> Vec<Line<'static
                 Span::raw("Press "),
                 Span::styled("D", key),
                 Span::raw(" again to delete: "),
-                Span::styled(name.to_string(), Style::default().fg(theme.song_title_accent)),
+                Span::styled(
+                    name.to_string(),
+                    Style::default()
+                        .fg(theme.song_title_accent)
+                        .bg(theme.background),
+                ),
                 Span::raw(" • "),
                 Span::styled("Esc", key),
                 Span::raw(" cancel"),
@@ -484,11 +533,18 @@ fn draw_help_overlay(f: &mut Frame, player: &Player, ui: &UiState, theme: &Theme
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .title_top(base_header)
-        .style(Style::default().fg(theme.text_primary));
+        .style(
+            Style::default()
+                .fg(theme.text_primary)
+                .bg(theme.background),
+        );
 
     if !indicator.is_empty() {
         block = block.title_bottom(
-            Line::styled(indicator, Style::default().fg(theme.text_muted))
+            Line::styled(
+                indicator,
+                Style::default().fg(theme.text_muted).bg(theme.background),
+            )
                 .alignment(Alignment::Right),
         );
     }
@@ -498,7 +554,11 @@ fn draw_help_overlay(f: &mut Frame, player: &Player, ui: &UiState, theme: &Theme
     let p = Paragraph::new(Text::from(styled_lines))
         .block(block)
         .scroll((scroll, 0))
-        .style(Style::default().fg(theme.text_primary));
+        .style(
+            Style::default()
+                .fg(theme.text_primary)
+                .bg(theme.background),
+        );
 
     f.render_widget(p, overlay);
 }

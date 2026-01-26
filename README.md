@@ -113,9 +113,17 @@ Trix can load a user config file from:
 
 Currently this is focused on theming colors.
 
+Theme selection is intentionally **not terminal-specific**:
+
+- Default theme: **Atom Dark** (standardized RGB colors)
+- Override: your config file values (deterministic, field-by-field)
+
+For maximum consistency across terminals, prefer hex RGB colors (e.g. `"#61afef"`).
+Basic named colors (e.g. `"cyan"`, `"white"`) may still vary depending on your terminal’s ANSI palette.
+
 ### Theme colors
 
-Color values can be basic names (e.g. `"cyan"`, `"dark_gray"`) or hex RGB (e.g. `"#7aa2f7"`).
+Color values can be basic names (e.g. `"cyan"`, `"dark_gray"`) or hex RGB (e.g. `"#61afef"`).
 
 Important semantic constraint:
 
@@ -127,25 +135,29 @@ Example `~/.config/trix/config.toml`:
 
 ```toml
 [theme]
-title_accent = "#7aa2f7"
-current_track_accent = "#7aa2f7"
-playing_indicator = "#9ece6a"
+
+# Global UI background
+background = "#282c34"
+
+title_accent = "#61afef"
+current_track_accent = "#56b6c2"
+playing_indicator = "#98c379"
 
 # Single knob: library frame + selection highlight
-library_accent = "#e0af68"
+library_accent = "#e5c07b"
 
-now_accent = "#7aa2f7"
-progress_accent = "#9ece6a"
-hints_accent = "#7dcfff"
-search_accent = "#bb9af7"
-move_accent = "#e0af68"
+now_accent = "#61afef"
+progress_accent = "#98c379"
+hints_accent = "#c678dd"
+search_accent = "#56b6c2"
+move_accent = "#e5c07b"
 
-key_accent = "#bb9af7"
-song_title_accent = "#e0af68"
+key_accent = "#c678dd"
+song_title_accent = "#e5c07b"
 
-text_primary = "white"
-text_muted = "dark_gray"
-error = "red"
+text_primary = "#abb2bf"
+text_muted = "#5c6370"
+error = "#e06c75"
 ```
 
 ### Keyboard Controls

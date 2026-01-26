@@ -35,6 +35,11 @@ impl Config {
 
 #[derive(Debug, Clone)]
 pub struct Theme {
+    /// Global UI background.
+    ///
+    /// Default is a standard Atom Dark background so the UI is consistent across terminals.
+    pub background: Color,
+
     pub title_accent: Color,
     pub current_track_accent: Color,
     pub playing_indicator: Color,
@@ -62,20 +67,28 @@ pub struct Theme {
 impl Default for Theme {
     fn default() -> Self {
         Self {
-            title_accent: Color::Cyan,
-            current_track_accent: Color::Cyan,
-            playing_indicator: Color::Green,
-            library_accent: Color::Yellow,
-            now_accent: Color::Cyan,
-            progress_accent: Color::Green,
-            hints_accent: Color::Blue,
-            search_accent: Color::Magenta,
-            move_accent: Color::Yellow,
-            key_accent: Color::Magenta,
-            song_title_accent: Color::Yellow,
-            text_primary: Color::White,
-            text_muted: Color::DarkGray,
-            error: Color::Red,
+            // Atom Dark / One Dark inspired palette (standardized RGB).
+            // Using RGB avoids terminal-specific reinterpretation of ANSI named colors.
+            background: Color::Rgb(0x28, 0x2c, 0x34),       // #282c34
+
+            title_accent: Color::Rgb(0x61, 0xaf, 0xef),     // #61afef (blue)
+            current_track_accent: Color::Rgb(0x56, 0xb6, 0xc2), // #56b6c2 (cyan)
+            playing_indicator: Color::Rgb(0x98, 0xc3, 0x79), // #98c379 (green)
+
+            library_accent: Color::Rgb(0xe5, 0xc0, 0x7b),   // #e5c07b (yellow)
+
+            now_accent: Color::Rgb(0x61, 0xaf, 0xef),       // #61afef (blue)
+            progress_accent: Color::Rgb(0x98, 0xc3, 0x79),  // #98c379 (green)
+            hints_accent: Color::Rgb(0xc6, 0x78, 0xdd),     // #c678dd (purple)
+            search_accent: Color::Rgb(0x56, 0xb6, 0xc2),    // #56b6c2 (cyan)
+            move_accent: Color::Rgb(0xe5, 0xc0, 0x7b),      // #e5c07b (yellow)
+
+            key_accent: Color::Rgb(0xc6, 0x78, 0xdd),       // #c678dd (purple)
+            song_title_accent: Color::Rgb(0xe5, 0xc0, 0x7b), // #e5c07b (yellow)
+
+            text_primary: Color::Rgb(0xab, 0xb2, 0xbf),     // #abb2bf
+            text_muted: Color::Rgb(0x5c, 0x63, 0x70),       // #5c6370
+            error: Color::Rgb(0xe0, 0x6c, 0x75),            // #e06c75
         }
     }
 }
@@ -87,6 +100,8 @@ struct RawConfig {
 
 #[derive(Debug, Default, Deserialize)]
 struct RawTheme {
+    background: Option<String>,
+
     title_accent: Option<String>,
     current_track_accent: Option<String>,
     playing_indicator: Option<String>,
@@ -125,6 +140,8 @@ fn load_from_path(path: &PathBuf) -> Result<Config> {
 }
 
 fn apply_theme(out: &mut Theme, raw: RawTheme) {
+    apply_color(&mut out.background, raw.background, "theme.background");
+
     apply_color(&mut out.title_accent, raw.title_accent, "theme.title_accent");
     apply_color(
         &mut out.current_track_accent,
