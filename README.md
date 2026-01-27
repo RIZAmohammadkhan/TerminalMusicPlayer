@@ -115,7 +115,7 @@ Currently this is focused on theming colors.
 
 Theme selection is intentionally **not terminal-specific**:
 
-- Default theme: **Atom Dark** (standardized RGB colors)
+- Default theme: **Atom Dark** accents (standardized RGB colors) with terminal-default background
 - Override: your config file values (deterministic, field-by-field)
 
 For maximum consistency across terminals, prefer hex RGB colors (e.g. `"#61afef"`).
@@ -137,7 +137,9 @@ Example `~/.config/trix/config.toml`:
 [theme]
 
 # Global UI background
-background = "#282c34"
+# Use "reset" (or omit this key) to respect your terminal background/transparency.
+# Set a hex color (e.g. "#282c34") to force a solid UI background.
+background = "reset"
 
 title_accent = "#61afef"
 current_track_accent = "#56b6c2"

@@ -4,7 +4,7 @@ use ratatui::{
     prelude::*,
     text::{Span, Text},
     widgets::block::Title,
-    widgets::{Block, BorderType, Borders, Clear, Gauge, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
 
 use crate::{
@@ -18,7 +18,8 @@ use super::input::UiState;
 pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Theme) {
     let area = f.area();
 
-    // Fill the entire frame with the theme background so the UI is consistent across terminals.
+    // Fill the entire frame with the theme background.
+    // By default this is `Color::Reset`, which respects the user's terminal background.
     f.render_widget(
         Block::default().style(Style::default().bg(theme.background)),
         area,
@@ -57,38 +58,62 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
         .split(mid[0]);
 
     // Playlist
-    let items: Vec<ListItem> = player
-        .tracks
-        .iter()
-        .enumerate()
-        .map(|(i, t)| {
-            let (prefix, prefix_style) = if i == player.current {
-                (
-                    "▶ ",
-                    Style::default().fg(theme.playing_indicator).bg(theme.background),
-                )
-            } else {
-                ("  ", Style::default().fg(theme.text_primary).bg(theme.background))
-            };
+    // Virtualize: only generate items that can be visible.
+    // The inner list height is the rect height minus borders.
+    let list_rect = left[0];
+    let visible_rows = list_rect.height.saturating_sub(2) as usize;
 
-            let name_style = if i == player.current {
-                Style::default()
-                    .fg(theme.current_track_accent)
-                    .bg(theme.background)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme.text_primary).bg(theme.background)
-            };
+    let total = player.tracks.len();
+    let selected = if total == 0 {
+        None
+    } else {
+        Some(player.selected.min(total - 1))
+    };
 
-            ListItem::new(Line::from(vec![
-                Span::styled(prefix, prefix_style),
-                Span::styled(t.display_name.clone(), name_style),
-            ]))
-        })
-        .collect();
+    let (offset, items): (usize, Vec<ListItem>) = if total == 0 || visible_rows == 0 {
+        (0, Vec::new())
+    } else {
+        let selected = selected.unwrap_or(0);
+        let max_offset = total.saturating_sub(visible_rows);
+        let mut offset = selected.saturating_sub(visible_rows.saturating_sub(1) / 2);
+        offset = offset.min(max_offset);
+
+        let end = (offset + visible_rows).min(total);
+        let items = player.tracks[offset..end]
+            .iter()
+            .enumerate()
+            .map(|(local_i, t)| {
+                let i = offset + local_i;
+                let (prefix, prefix_style) = if i == player.current {
+                    (
+                        "▶ ",
+                        Style::default().fg(theme.playing_indicator).bg(theme.background),
+                    )
+                } else {
+                    ("  ", Style::default().fg(theme.text_primary).bg(theme.background))
+                };
+
+                let name_style = if i == player.current {
+                    Style::default()
+                        .fg(theme.current_track_accent)
+                        .bg(theme.background)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(theme.text_primary).bg(theme.background)
+                };
+
+                ListItem::new(Line::from(vec![
+                    Span::styled(prefix, prefix_style),
+                    Span::styled(t.display_name.clone(), name_style),
+                ]))
+            })
+            .collect();
+
+        (offset, items)
+    };
 
     let mut state = ratatui::widgets::ListState::default();
-    state.select(Some(player.selected));
+    state.select(selected.map(|s| s.saturating_sub(offset)));
 
     let list = List::new(items)
         .style(Style::default().fg(theme.text_primary).bg(theme.background))
@@ -114,7 +139,7 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
         )
         .highlight_symbol("» ");
 
-    f.render_stateful_widget(list, left[0], &mut state);
+    f.render_stateful_widget(list, list_rect, &mut state);
 
     let (box_title, box_border, box_style, box_text) = if ui.move_mode {
         let input = if ui.move_query.is_empty() {
@@ -218,36 +243,57 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
     f.render_widget(now_widget, right[0]);
 
     let (ratio, label) = progress(player);
-    let gauge = Gauge::default()
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(theme.progress_accent))
-                .style(Style::default().bg(theme.background))
-                .title(Title::from(Line::styled(
-                    "Progress",
-                    Style::default()
-                        .fg(theme.progress_accent)
-                        .bg(theme.background)
-                        .add_modifier(Modifier::BOLD),
-                ))),
-        )
-        .gauge_style(
+
+    // Render a titled block and manually draw the progress fill so we can
+    // precisely control which cells are filled and which are empty. This
+    // avoids Gauge internals painting unexpected backgrounds around the label.
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.progress_accent))
+        .style(Style::default().bg(theme.background))
+        .title(Title::from(Line::styled(
+            "Progress",
             Style::default()
                 .fg(theme.progress_accent)
                 .bg(theme.background)
                 .add_modifier(Modifier::BOLD),
-        )
-        .ratio(ratio)
-        .label(Span::styled(
-            label,
-            Style::default()
-                .fg(theme.text_primary)
-                .bg(theme.background)
-                .add_modifier(Modifier::BOLD),
-        ));
-    f.render_widget(gauge, right[1]);
+        )));
+
+    f.render_widget(block, right[1]);
+
+    // Fill inner area manually.
+    let inner = right[1].inner(Margin {
+        vertical: 1,
+        horizontal: 1,
+    });
+    if inner.width > 0 && inner.height > 0 {
+        let ratio = ratio.clamp(0.0, 1.0);
+        let fill_cols = ((inner.width as f64) * ratio).round() as u16;
+        let fill_cols = fill_cols.min(inner.width);
+
+        let filled_style = Style::default()
+            .fg(theme.background)
+            .bg(theme.progress_accent)
+            .add_modifier(Modifier::BOLD);
+        let empty_style = Style::default()
+            .fg(theme.text_primary)
+            .bg(theme.background)
+            .add_modifier(Modifier::BOLD);
+
+        let buf = f.buffer_mut();
+        for yy in inner.y..inner.y.saturating_add(inner.height) {
+            for xx in inner.x..inner.x.saturating_add(inner.width) {
+                let rel = xx.saturating_sub(inner.x);
+                let style = if rel < fill_cols { filled_style } else { empty_style };
+                if let Some(cell) = buf.cell_mut((xx, yy)) {
+                    cell.set_symbol(" ").set_style(style);
+                }
+            }
+        }
+    }
+
+    draw_progress_label(f, right[1], ratio, &label, theme);
 
     let hints = hints_lines(player, ui, theme);
     let help_widget = Paragraph::new(Text::from(hints))
@@ -444,17 +490,78 @@ fn hints_lines(player: &Player, ui: &UiState, theme: &Theme) -> Vec<Line<'static
 }
 
 fn progress(player: &Player) -> (f64, String) {
-    let pos = player.position();
+    let pos_raw = player.position();
     if let Some(total) = player.total_duration {
-        let ratio = if total.as_millis() == 0 {
-            0.0
+        let total_secs = total.as_secs_f64();
+        let pos = if total > Duration::ZERO {
+            pos_raw.min(total)
         } else {
-            (pos.as_secs_f64() / total.as_secs_f64()).clamp(0.0, 1.0)
+            pos_raw
         };
+
+        let ratio = if total_secs > 0.0 {
+            (pos.as_secs_f64() / total_secs).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+
         let label = format!("{} / {}", fmt_time(pos), fmt_time(total));
         (ratio, label)
     } else {
-        (0.0, format!("{} / --:--", fmt_time(pos)))
+        (0.0, format!("{} / --:--", fmt_time(pos_raw)))
+    }
+}
+
+fn draw_progress_label(f: &mut Frame, area: Rect, ratio: f64, label: &str, theme: &Theme) {
+    let inner = area.inner(Margin {
+        vertical: 1,
+        horizontal: 1,
+    });
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    // The progress gauge's inner height is typically 1 line; if it's taller, center vertically.
+    let y = inner.y.saturating_add(inner.height.saturating_sub(1) / 2);
+
+    let ratio = ratio.clamp(0.0, 1.0);
+    let fill_cols = ((inner.width as f64) * ratio).round() as u16;
+    let fill_cols = fill_cols.min(inner.width);
+
+    let label_width = label.chars().count() as u16;
+    let start_x = inner
+        .x
+        .saturating_add(inner.width.saturating_sub(label_width) / 2);
+
+    let filled_style = Style::default()
+        .fg(theme.background)
+        .bg(theme.progress_accent)
+        .add_modifier(Modifier::BOLD);
+    let empty_style = Style::default()
+        .fg(theme.text_primary)
+        .bg(theme.background)
+        .add_modifier(Modifier::BOLD);
+
+    let buf = f.buffer_mut();
+    for (i, ch) in label.chars().enumerate() {
+        let x = start_x.saturating_add(i as u16);
+        if x < inner.x || x >= inner.x.saturating_add(inner.width) {
+            continue;
+        }
+
+        // Only invert the part of the label that actually overlaps the filled region.
+        // If the filled region is less than the label's left edge, the label is all empty_style.
+        // If the filled region is inside the label, only the left part is inverted.
+        let rel_x = x.saturating_sub(inner.x);
+        let style = if rel_x >= fill_cols {
+            empty_style
+        } else {
+            filled_style
+        };
+
+        if let Some(cell) = buf.cell_mut((x, y)) {
+            cell.set_symbol(&ch.to_string()).set_style(style);
+        }
     }
 }
 

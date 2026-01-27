@@ -37,7 +37,8 @@ impl Config {
 pub struct Theme {
     /// Global UI background.
     ///
-    /// Default is a standard Atom Dark background so the UI is consistent across terminals.
+    /// Default is `Color::Reset` so the UI respects the user's terminal background
+    /// (including transparency and custom color schemes).
     pub background: Color,
 
     pub title_accent: Color,
@@ -69,7 +70,9 @@ impl Default for Theme {
         Self {
             // Atom Dark / One Dark inspired palette (standardized RGB).
             // Using RGB avoids terminal-specific reinterpretation of ANSI named colors.
-            background: Color::Rgb(0x28, 0x2c, 0x34),       // #282c34
+            // Background is reset by default to respect terminal theme/transparency.
+            // Set `theme.background` in config to force a specific color.
+            background: Color::Reset,
 
             title_accent: Color::Rgb(0x61, 0xaf, 0xef),     // #61afef (blue)
             current_track_accent: Color::Rgb(0x56, 0xb6, 0xc2), // #56b6c2 (cyan)
@@ -216,6 +219,12 @@ fn parse_color(s: &str) -> Option<Color> {
     }
 
     let lower = s.to_ascii_lowercase();
+
+    // Respect terminal defaults
+    match lower.as_str() {
+        "reset" | "default" | "none" | "transparent" | "terminal" => return Some(Color::Reset),
+        _ => {}
+    }
 
     // Hex: #RRGGBB
     if let Some(hex) = lower.strip_prefix('#') {
