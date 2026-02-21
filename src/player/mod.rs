@@ -2,7 +2,7 @@ use std::{
     cmp::min,
     fs,
     io,
-    path::Path,
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
@@ -49,10 +49,18 @@ pub(crate) struct Player {
     pub(crate) now_meta: TrackMeta,
 
     pub(crate) loop_current: bool,
+
+    /// The directory from which the library was loaded. Used for YouTube downloads.
+    pub(crate) library_path: PathBuf,
 }
 
 impl Player {
-    pub(crate) fn new(tracks: Vec<Track>, start_index: usize, audio: AudioOutput) -> Result<Self> {
+    pub(crate) fn new(
+        tracks: Vec<Track>,
+        start_index: usize,
+        audio: AudioOutput,
+        library_path: PathBuf,
+    ) -> Result<Self> {
         let audio_ctl = audio.control();
 
         let start_index = min(start_index, tracks.len().saturating_sub(1));
@@ -78,6 +86,7 @@ impl Player {
             now_meta: TrackMeta::default(),
 
             loop_current: false,
+            library_path,
         })
     }
 
@@ -302,6 +311,41 @@ impl Player {
     pub(crate) fn select_down(&mut self) {
         if self.selected + 1 < self.tracks.len() {
             self.selected += 1;
+        }
+    }
+
+    /// Re-discover tracks from the library directory and merge new ones in.
+    pub(crate) fn refresh_tracks(&mut self) {
+        use crate::library::discover_tracks;
+
+        let Ok(fresh) = discover_tracks(&self.library_path) else {
+            return;
+        };
+
+        // Collect existing paths for O(n) lookup.
+        let existing: std::collections::HashSet<PathBuf> =
+            self.tracks.iter().map(|t| t.path.clone()).collect();
+
+        let mut added = false;
+        for track in fresh {
+            if !existing.contains(&track.path) {
+                self.tracks.push(track);
+                added = true;
+            }
+        }
+
+        if added {
+            // Re-sort the full list.
+            self.tracks.sort_by(|a, b| a.path.cmp(&b.path));
+
+            // Recompute shuffle order.
+            if self.shuffle {
+                self.play_order = make_shuffled_order(self.tracks.len(), self.current);
+                self.play_pos = 0;
+            } else {
+                self.play_order = (0..self.tracks.len()).collect();
+                self.sync_play_pos();
+            }
         }
     }
 

@@ -92,6 +92,14 @@ trix_path="$(find "$tmpdir" -type f -name trix -perm -u+x 2>/dev/null | head -n 
 say "Installing to: $INSTALL_DIR/trix"
 install -m 0755 "$trix_path" "$INSTALL_DIR/trix"
 
+# yt-dlp is required for the YouTube download feature.
+if ! command -v yt-dlp >/dev/null 2>&1; then
+  say "Installing yt-dlp..."
+  sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+  sudo chmod a+rx /usr/local/bin/yt-dlp
+  say "yt-dlp installed."
+fi
+
 say "Done. Run: trix"
 
 if ! command -v trix >/dev/null 2>&1; then

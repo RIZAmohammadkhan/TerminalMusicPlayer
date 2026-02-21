@@ -141,7 +141,47 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
 
     f.render_stateful_widget(list, list_rect, &mut state);
 
-    let (box_title, box_border, box_style, box_text) = if ui.move_mode {
+    let (box_title, box_border, box_style, box_text) = if ui.youtube_dl_mode {
+        use super::input::YtDlStatus;
+
+        let status_line = {
+            let status = ui.youtube_dl_status.lock().unwrap();
+            match &*status {
+                YtDlStatus::Idle => None,
+                YtDlStatus::Downloading(url) => {
+                    let short = if url.len() > 40 { &url[..40] } else { url.as_str() };
+                    Some((format!("⏳ Downloading {short}…"), theme.title_accent))
+                }
+                YtDlStatus::Done(msg, _) => Some((msg.clone(), theme.library_accent)),
+                YtDlStatus::Error(msg) => Some((msg.clone(), theme.error)),
+            }
+        };
+
+        let input = if ui.youtube_dl_url.is_empty() {
+            "Paste or type a YouTube URL…".to_string()
+        } else {
+            ui.youtube_dl_url.clone()
+        };
+
+        let text = if let Some((msg, color)) = status_line {
+            Text::from(vec![
+                Line::styled(msg, Style::default().fg(color).bg(theme.background)),
+                Line::raw(input),
+            ])
+        } else {
+            Text::from(input)
+        };
+
+        (
+            "YouTube Download",
+            theme.now_accent,
+            Style::default()
+                .fg(theme.text_primary)
+                .bg(theme.background)
+                .add_modifier(Modifier::BOLD),
+            text,
+        )
+    } else if ui.move_mode {
         let input = if ui.move_query.is_empty() {
             "Type a timestamp (e.g. 1:30)".to_string()
         } else {
@@ -409,6 +449,17 @@ fn heading_style(theme: &Theme) -> Style {
 fn hints_lines(player: &Player, ui: &UiState, theme: &Theme) -> Vec<Line<'static>> {
     let key = key_style(theme);
 
+    if ui.youtube_dl_mode {
+        return vec![Line::from(vec![
+            Span::styled("Enter", key),
+            Span::raw(" download • "),
+            Span::styled("Esc", key),
+            Span::raw(" cancel • "),
+            Span::styled("Backspace", key),
+            Span::raw(" delete"),
+        ])];
+    }
+
     if ui.search_mode {
         return vec![Line::from(vec![
             Span::styled("Enter", key),
@@ -484,6 +535,8 @@ fn hints_lines(player: &Player, ui: &UiState, theme: &Theme) -> Vec<Line<'static
         Span::raw(" search • "),
         Span::styled("m", key),
         Span::raw(" move • "),
+        Span::styled("y", key),
+        Span::raw(" youtube dl • "),
         Span::styled("D", key),
         Span::raw(" delete"),
     ])]
@@ -580,6 +633,7 @@ fn help_text(ui: &UiState) -> String {
         "  s           toggle shuffle order",
         "  S           search library (type to select)",
         "  m           move to timestamp (e.g. 1:30)",
+        "  y           youtube download (paste URL, Enter to download)",
         "  D           delete selected track (press twice)",
         "  ↑/↓         scroll (PgUp/PgDn, Home/End)",
         "",

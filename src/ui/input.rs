@@ -1,3 +1,4 @@
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -28,12 +29,24 @@ pub(crate) struct UiState {
     last_seek_at: Instant,
     pub(crate) delete_confirm: Option<DeleteConfirm>,
     pub(crate) last_tick: Instant,
+    // YouTube download mode
+    pub(crate) youtube_dl_mode: bool,
+    pub(crate) youtube_dl_url: String,
+    pub(crate) youtube_dl_status: Arc<Mutex<YtDlStatus>>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct DeleteConfirm {
     pub(crate) index: usize,
     pub(crate) started_at: Instant,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum YtDlStatus {
+    Idle,
+    Downloading(String),
+    Done(String, Instant),
+    Error(String),
 }
 
 impl UiState {
@@ -51,6 +64,9 @@ impl UiState {
             last_seek_at: Instant::now() - Duration::from_millis(500),
             delete_confirm: None,
             last_tick: Instant::now(),
+            youtube_dl_mode: false,
+            youtube_dl_url: String::new(),
+            youtube_dl_status: Arc::new(Mutex::new(YtDlStatus::Idle)),
         }
     }
 
@@ -65,6 +81,8 @@ impl UiState {
         self.move_query.clear();
         self.move_error = None;
         self.delete_confirm = None;
+        self.youtube_dl_mode = false;
+        self.youtube_dl_url.clear();
     }
 }
 
@@ -176,6 +194,86 @@ pub(crate) fn handle_key(key: KeyEvent, player: &mut Player, ui: &mut UiState) -
         return Ok(UiAction::None);
     }
 
+    // YouTube download mode captures all typing.
+    if ui.youtube_dl_mode {
+        match key.code {
+            KeyCode::Esc => {
+                ui.youtube_dl_mode = false;
+                ui.youtube_dl_url.clear();
+            }
+            KeyCode::Enter => {
+                let url = ui.youtube_dl_url.trim().to_string();
+                if url.is_empty() {
+                    return Ok(UiAction::None);
+                }
+
+                // Check if already downloading
+                {
+                    let status = ui.youtube_dl_status.lock().unwrap();
+                    if matches!(*status, YtDlStatus::Downloading(_)) {
+                        return Ok(UiAction::None);
+                    }
+                }
+
+                let dest = player.library_path.clone();
+                let status = Arc::clone(&ui.youtube_dl_status);
+
+                {
+                    let mut s = status.lock().unwrap();
+                    *s = YtDlStatus::Downloading(url.clone());
+                }
+
+                // Spawn yt-dlp in a background thread.
+                std::thread::spawn(move || {
+                    let result = std::process::Command::new("yt-dlp")
+                        .arg("--no-playlist")
+                        .arg("-f")
+                        .arg("bestaudio[ext=m4a]/bestaudio") // prefer native AAC (no transcode)
+                        .arg("-x")                          // extract audio
+                        .arg("--audio-format")
+                        .arg("m4a")                         // ensure m4a output (Symphonia-compatible)
+                        .arg("--audio-quality")
+                        .arg("0")                           // best quality if conversion needed
+                        .arg("--embed-metadata")
+                        .arg("-o")
+                        .arg(format!("{}/%(title)s.%(ext)s", dest.display()))
+                        .arg(&url)
+                        .output();
+
+                    let mut s = status.lock().unwrap();
+                    match result {
+                        Ok(output) if output.status.success() => {
+                            *s = YtDlStatus::Done("Download complete!".to_string(), Instant::now());
+                        }
+                        Ok(output) => {
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+                            let msg = stderr.lines().last().unwrap_or("yt-dlp failed").to_string();
+                            *s = YtDlStatus::Error(msg);
+                        }
+                        Err(e) => {
+                            *s = YtDlStatus::Error(format!("Failed to run yt-dlp: {e}"));
+                        }
+                    }
+                });
+
+                ui.youtube_dl_url.clear();
+            }
+            KeyCode::Backspace => {
+                ui.youtube_dl_url.pop();
+            }
+            KeyCode::Char(c) => {
+                if !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT)
+                {
+                    ui.youtube_dl_url.push(c);
+                }
+            }
+            _ => {}
+        }
+
+        return Ok(UiAction::None);
+    }
+
     // Enter search mode.
     if key.code == KeyCode::Char('S') {
         ui.search_mode = true;
@@ -194,6 +292,26 @@ pub(crate) fn handle_key(key: KeyEvent, player: &mut Player, ui: &mut UiState) -
         ui.move_error = None;
         ui.search_mode = false;
         ui.search_query.clear();
+        ui.delete_confirm = None;
+        return Ok(UiAction::None);
+    }
+
+    // Enter YouTube download mode.
+    if key.code == KeyCode::Char('y') {
+        ui.youtube_dl_mode = true;
+        ui.youtube_dl_url.clear();
+        // Reset status if last download is done/errored so we start fresh.
+        {
+            let mut s = ui.youtube_dl_status.lock().unwrap();
+            if !matches!(*s, YtDlStatus::Downloading(_)) {
+                *s = YtDlStatus::Idle;
+            }
+        }
+        ui.search_mode = false;
+        ui.search_query.clear();
+        ui.move_mode = false;
+        ui.move_query.clear();
+        ui.move_error = None;
         ui.delete_confirm = None;
         return Ok(UiAction::None);
     }

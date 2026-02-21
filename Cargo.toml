@@ -51,7 +51,8 @@ maintainer = "Riza Mohammad <rizamohammad.work@gmail.com>"
 section = "sound"
 priority = "optional"
 # ALSA is used at runtime on Linux; keep $auto so cargo-deb can also infer other deps.
-depends = "$auto, libasound2"
+# yt-dlp is required for the YouTube download feature.
+depends = "$auto, libasound2, yt-dlp"
 
 [package.metadata.generate-rpm]
 # NOTE: RPM packaging needs a license string. Update this to match your project.
@@ -63,6 +64,7 @@ assets = [
 
 [package.metadata.generate-rpm.requires]
 alsa-lib = "*"
+yt-dlp = "*"
 
 [[bin]]
 name = "trix"

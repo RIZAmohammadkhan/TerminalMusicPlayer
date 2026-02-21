@@ -56,7 +56,7 @@ fn is_audio_file(path: &Path) -> bool {
     };
     matches!(
         ext.to_ascii_lowercase().as_str(),
-        "mp3" | "flac" | "wav" | "ogg" | "m4a" | "aac" | "opus"
+        "mp3" | "flac" | "wav" | "ogg" | "m4a" | "aac"
     )
 }
 
