@@ -392,11 +392,11 @@ pub(crate) fn handle_key(key: KeyEvent, player: &mut Player, ui: &mut UiState) -
     // Note: terminals don't provide a "v is held" modifier, so this is the most reliable UX.
     if ui.volume_mode {
         match key.code {
-            KeyCode::Up => {
+            KeyCode::Up | KeyCode::Char('k') => {
                 player.adjust_volume(0.05);
                 return Ok(UiAction::None);
             }
-            KeyCode::Down => {
+            KeyCode::Down | KeyCode::Char('j') => {
                 player.adjust_volume(-0.05);
                 return Ok(UiAction::None);
             }
@@ -502,7 +502,7 @@ pub(crate) fn handle_key(key: KeyEvent, player: &mut Player, ui: &mut UiState) -
         }
 
         // Nice-to-have navigation
-        KeyCode::Up => {
+        KeyCode::Up | KeyCode::Char('k') => {
             if ui.volume_mode {
                 player.adjust_volume(0.05);
             } else {
@@ -510,7 +510,7 @@ pub(crate) fn handle_key(key: KeyEvent, player: &mut Player, ui: &mut UiState) -
                 ui.delete_confirm = None;
             }
         }
-        KeyCode::Down => {
+        KeyCode::Down | KeyCode::Char('j') => {
             if ui.volume_mode {
                 player.adjust_volume(-0.05);
             } else {
