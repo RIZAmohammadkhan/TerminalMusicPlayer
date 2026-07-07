@@ -1,6 +1,6 @@
 # Maintainer: Riza Mohammad <rizamohammad.work@gmail.com>
 pkgname=trix-player
-pkgver=1.3.0
+pkgver=1.4.0
 pkgrel=1
 pkgdesc="A beautiful, keyboard-driven terminal music player for Linux (Binary)."
 arch=('x86_64')
