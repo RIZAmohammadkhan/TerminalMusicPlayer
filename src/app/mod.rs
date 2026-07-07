@@ -101,8 +101,12 @@ pub(crate) fn run() -> Result<()> {
         }
 
         // Auto-advance
-        if !player.loop_current && player.is_track_finished() {
-            let _ = player.next_track();
+        if !player.loop_current {
+            if player.audio_ctl_advanced() {
+                let _ = player.handle_auto_advance();
+            } else if player.is_track_finished() {
+                let _ = player.next_track();
+            }
         }
 
         // Refresh library when a YouTube download completes, then close the menu after 1s.

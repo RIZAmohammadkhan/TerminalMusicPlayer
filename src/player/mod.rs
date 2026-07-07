@@ -112,6 +112,7 @@ impl Player {
             self.play_order = (0..self.tracks.len()).collect();
             self.play_pos = self.current;
         }
+        self.prepare_next_track();
     }
 
     pub(crate) fn has_tracks(&self) -> bool {
@@ -136,6 +137,7 @@ impl Player {
         if !self.has_tracks() {
             return Ok(());
         }
+        self.audio_ctl.clear_next_source();
         self.current = self.selected;
         self.sync_play_pos();
         self.start_track(Duration::ZERO)
@@ -188,6 +190,8 @@ impl Player {
         self.paused_at = None;
         self.total_pause = Duration::ZERO;
         self.state = PlayState::Playing;
+
+        self.prepare_next_track();
         Ok(())
     }
 
@@ -229,6 +233,7 @@ impl Player {
         if !self.has_tracks() {
             return Ok(());
         }
+        self.audio_ctl.clear_next_source();
         self.play_pos = (self.play_pos + 1) % self.play_order.len();
         self.current = self.play_order[self.play_pos];
         self.selected = self.current;
@@ -239,6 +244,7 @@ impl Player {
         if !self.has_tracks() {
             return Ok(());
         }
+        self.audio_ctl.clear_next_source();
         self.play_pos = (self.play_pos + self.play_order.len() - 1) % self.play_order.len();
         self.current = self.play_order[self.play_pos];
         self.selected = self.current;
@@ -346,6 +352,7 @@ impl Player {
                 self.play_order = (0..self.tracks.len()).collect();
                 self.sync_play_pos();
             }
+            self.prepare_next_track();
         }
     }
 
@@ -420,8 +427,72 @@ impl Player {
         if deleting_current && was_playing_or_paused {
             self.selected = self.current;
             self.start_track(Duration::ZERO)?;
+        } else {
+            self.prepare_next_track();
         }
 
+        Ok(())
+    }
+
+    pub(crate) fn audio_ctl_advanced(&self) -> bool {
+        self.audio_ctl.take_advanced()
+    }
+
+    fn peek_next_track_index(&self) -> Option<usize> {
+        if !self.has_tracks() {
+            return None;
+        }
+        let next_play_pos = (self.play_pos + 1) % self.play_order.len();
+        Some(self.play_order[next_play_pos])
+    }
+
+    pub(crate) fn prepare_next_track(&mut self) {
+        if !self.has_tracks() || self.loop_current {
+            self.audio_ctl.clear_next_source();
+            return;
+        }
+
+        if let Some(next_idx) = self.peek_next_track_index() {
+            if let Some(track) = self.tracks.get(next_idx) {
+                let path = track.path.clone();
+                match open_source(&path, Duration::ZERO, false) {
+                    Ok((source, _)) => {
+                        self.audio_ctl.set_next_source(source, self.audio.channels, self.audio.sample_rate);
+                    }
+                    Err(_) => {
+                        self.audio_ctl.clear_next_source();
+                    }
+                }
+            }
+        } else {
+            self.audio_ctl.clear_next_source();
+        }
+    }
+
+    pub(crate) fn handle_auto_advance(&mut self) -> Result<()> {
+        if !self.has_tracks() {
+            return Ok(());
+        }
+        self.play_pos = (self.play_pos + 1) % self.play_order.len();
+        self.current = self.play_order[self.play_pos];
+        self.selected = self.current;
+
+        let track = self
+            .current_track()
+            .context("No track selected")?
+            .path
+            .clone();
+
+        let meta = meta::probe_track_meta(&track).unwrap_or_default();
+        self.now_meta = meta.clone();
+        self.total_duration = meta.duration.or_else(|| meta::probe_duration(&track).ok());
+        self.base_pos = Duration::ZERO;
+        self.started_at = Some(Instant::now());
+        self.paused_at = None;
+        self.total_pause = Duration::ZERO;
+        self.state = PlayState::Playing;
+
+        self.prepare_next_track();
         Ok(())
     }
 }

@@ -17,6 +17,7 @@ pub struct AudioControl {
     paused: Arc<AtomicBool>,
     gain_bits: Arc<AtomicU32>,
     finished: Arc<AtomicBool>,
+    advanced: Arc<AtomicBool>,
     killed: Arc<AtomicBool>,
 }
 
@@ -30,6 +31,7 @@ impl AudioControl {
         // Best-effort: clear pending source + buffered audio if we can grab the lock quickly.
         if let Ok(mut state) = self.state.try_lock() {
             state.pending_source = None;
+            state.pending_next_source = None;
             state.buffer.clear();
             state.source_generation.fetch_add(1, Ordering::Relaxed);
         }
@@ -67,19 +69,44 @@ impl AudioControl {
         let src = UniformSourceIterator::new(source, out_channels, out_sample_rate);
         if let Ok(mut state) = self.state.lock() {
             state.pending_source = Some(Box::new(src));
+            state.pending_next_source = None;
             state.buffer.clear();
             state.source_generation.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn set_next_source(
+        &self,
+        source: Box<dyn Source<Item = f32> + Send>,
+        out_channels: u16,
+        out_sample_rate: u32,
+    ) {
+        let src = UniformSourceIterator::new(source, out_channels, out_sample_rate);
+        if let Ok(mut state) = self.state.lock() {
+            state.pending_next_source = Some(Box::new(src));
+        }
+    }
+
+    pub fn clear_next_source(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.pending_next_source = None;
         }
     }
 
     pub fn take_finished(&self) -> bool {
         self.finished.swap(false, Ordering::Relaxed)
     }
+
+    pub fn take_advanced(&self) -> bool {
+        self.advanced.swap(false, Ordering::Relaxed)
+    }
 }
 
 struct State {
     // Next source to play (already converted to output channels/sample-rate).
     pending_source: Option<Box<dyn Source<Item = f32> + Send>>,
+    // Pre-decoded next track, already wrapped in UniformSourceIterator.
+    pending_next_source: Option<Box<dyn Source<Item = f32> + Send>>,
     // Interleaved f32 samples ready for the audio callback.
     buffer: VecDeque<f32>,
     // Monotonic generation counter for source swaps.
@@ -115,12 +142,14 @@ impl AudioOutput {
 
         let state = Arc::new(Mutex::new(State {
             pending_source: None,
+            pending_next_source: None,
             buffer: VecDeque::new(),
             source_generation: AtomicU64::new(0),
         }));
         let paused = Arc::new(AtomicBool::new(false));
         let gain_bits = Arc::new(AtomicU32::new(1.0f32.to_bits()));
         let finished = Arc::new(AtomicBool::new(false));
+        let advanced = Arc::new(AtomicBool::new(false));
         let killed = Arc::new(AtomicBool::new(false));
 
         // Producer thread that decodes/resamples outside the audio callback.
@@ -134,6 +163,7 @@ impl AudioOutput {
         let spawn_worker = |state: Arc<Mutex<State>>,
                             paused: Arc<AtomicBool>,
                             finished: Arc<AtomicBool>,
+                            advanced: Arc<AtomicBool>,
                             killed: Arc<AtomicBool>|
          -> (Arc<AtomicBool>, std::thread::JoinHandle<()>) {
             let worker_alive = Arc::new(AtomicBool::new(true));
@@ -148,6 +178,7 @@ impl AudioOutput {
                         active = None;
                         if let Ok(mut st) = state.lock() {
                             st.pending_source = None;
+                            st.pending_next_source = None;
                             st.buffer.clear();
                         }
                         thread::sleep(Duration::from_millis(10));
@@ -198,8 +229,29 @@ impl AudioOutput {
                         match src.next() {
                             Some(s) => chunk.push(s),
                             None => {
-                                active = None;
-                                finished.store(true, Ordering::Relaxed);
+                                let mut switched = false;
+                                if let Ok(mut st) = state.lock() {
+                                    if let Some(next_src) = st.pending_next_source.take() {
+                                        active = Some(next_src);
+                                        advanced.store(true, Ordering::Relaxed);
+                                        switched = true;
+                                    }
+                                }
+                                if switched {
+                                    if let Some(new_src) = active.as_mut() {
+                                        match new_src.next() {
+                                            Some(s) => chunk.push(s),
+                                            None => {
+                                                active = None;
+                                                finished.store(true, Ordering::Relaxed);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    active = None;
+                                    finished.store(true, Ordering::Relaxed);
+                                }
                                 break;
                             }
                         }
@@ -228,6 +280,7 @@ impl AudioOutput {
             paused: Arc::clone(&paused),
             gain_bits: Arc::clone(&gain_bits),
             finished: Arc::clone(&finished),
+            advanced: Arc::clone(&advanced),
             killed: Arc::clone(&killed),
         };
 
@@ -259,6 +312,7 @@ impl AudioOutput {
                         Arc::clone(&state),
                         Arc::clone(&paused),
                         Arc::clone(&finished),
+                        Arc::clone(&advanced),
                         Arc::clone(&killed),
                     );
                     return Ok(Self {
@@ -291,7 +345,7 @@ impl AudioOutput {
 
         stream.play().map_err(|e| anyhow!(e))?;
 
-        let (worker_alive, worker) = spawn_worker(state, paused, finished, killed);
+        let (worker_alive, worker) = spawn_worker(state, paused, finished, advanced, killed);
         Ok(Self {
             _stream: stream,
             control,
