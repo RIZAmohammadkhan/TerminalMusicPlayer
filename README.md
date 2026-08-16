@@ -33,6 +33,7 @@ https://github.com/user-attachments/assets/4a7be924-2580-49d4-bd89-cddd8a084f2b
 *   **Playback Control:** Shuffle, Loop (track/playlist), and Seek.
 *   **File Management:** Delete tracks directly from the player.
 *   **Standard Compliance:** automatically detects music via `XDG_MUSIC_DIR` or defaults to `~/Music`.
+*   **MPRIS2 Support:** Control playback externally via D-Bus/MPRIS (works with `playerctl`, media keys, KDE Connect, etc.).
 
 ## 📦 Installation
 
@@ -185,6 +186,10 @@ Trix is designed to be used entirely without a mouse.
 | `←` | Seek backward 5s (per press) |
 | `n` | Seek forward 10s |
 | `p` | Seek backward 10s |
+| **Favorites** | |
+| `a` | Add/Remove selected track from favorites |
+| `A` | Clear all favorites |
+| `Tab` | Toggle between Library and Favorites view |
 | **Utility** | |
 | `S` | **Search** mode (Type to filter, `Enter` to play) |
 | `m` | **Move** to timestamp (e.g. `1:30`, `01:02:03`) |

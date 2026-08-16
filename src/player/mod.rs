@@ -20,9 +20,9 @@ use crate::{
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PlayState {
-    Stopped,
-    Playing,
-    Paused,
+    Stopped = 0,
+    Playing = 1,
+    Paused = 2,
 }
 
 pub(crate) struct Player {
@@ -275,6 +275,37 @@ impl Player {
             PlayState::Stopped => {
                 // no-op
             }
+        }
+    }
+
+    /// MPRIS Play: resume if paused, start from beginning if stopped.
+    pub(crate) fn play(&mut self) -> Result<()> {
+        match self.state {
+            PlayState::Playing => Ok(()),
+            PlayState::Paused => {
+                self.audio_ctl.set_paused(false);
+                self.state = PlayState::Playing;
+                if let Some(paused_at) = self.paused_at.take() {
+                    self.total_pause += paused_at.elapsed();
+                }
+                Ok(())
+            }
+            PlayState::Stopped => {
+                if self.has_tracks() {
+                    self.start_track(Duration::ZERO)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    }
+
+    /// MPRIS Pause: pause if currently playing; no-op otherwise.
+    pub(crate) fn pause(&mut self) {
+        if self.state == PlayState::Playing {
+            self.audio_ctl.set_paused(true);
+            self.state = PlayState::Paused;
+            self.paused_at = Some(Instant::now());
         }
     }
 

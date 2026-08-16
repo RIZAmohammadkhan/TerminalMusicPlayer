@@ -7,6 +7,7 @@ mod config;
 mod library;
 mod lrc;
 mod meta;
+mod mpris;
 mod player;
 mod term;
 mod ui;
