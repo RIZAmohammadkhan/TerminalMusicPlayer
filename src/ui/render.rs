@@ -9,6 +9,7 @@ use ratatui::{
 
 use crate::{
     config::Theme,
+    lrc,
     player::{PlayState, Player},
     util::fmt_time,
 };
@@ -258,6 +259,7 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
         .constraints([
             Constraint::Length(6),
             Constraint::Length(3),
+            Constraint::Length(5),
             Constraint::Min(0),
         ])
         .split(mid[1]);
@@ -335,6 +337,8 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
 
     draw_progress_label(f, right[1], ratio, &label, theme);
 
+    draw_lyrics(f, right[2], player, theme);
+
     let hints = hints_lines(player, ui, theme);
     let help_widget = Paragraph::new(Text::from(hints))
         .wrap(Wrap { trim: true })
@@ -353,7 +357,7 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
                         .add_modifier(Modifier::BOLD),
                 ))),
         );
-    f.render_widget(help_widget, right[2]);
+    f.render_widget(help_widget, right[3]);
 
     if ui.show_help {
         draw_help_overlay(f, player, ui, theme);
@@ -616,6 +620,109 @@ fn draw_progress_label(f: &mut Frame, area: Rect, ratio: f64, label: &str, theme
             cell.set_symbol(&ch.to_string()).set_style(style);
         }
     }
+}
+
+fn draw_lyrics(f: &mut Frame, area: Rect, player: &Player, theme: &Theme) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme.now_accent))
+        .style(Style::default().bg(theme.background))
+        .title(Title::from(Line::styled(
+            "Lyrics",
+            Style::default()
+                .fg(theme.now_accent)
+                .bg(theme.background)
+                .add_modifier(Modifier::BOLD),
+        )));
+
+    let inner = area.inner(Margin {
+        vertical: 1,
+        horizontal: 1,
+    });
+    f.render_widget(block, area);
+
+    if inner.width == 0 || inner.height < 3 {
+        return;
+    }
+
+    let muted_style = Style::default().fg(theme.text_muted).bg(theme.background);
+    let active_style = Style::default()
+        .fg(theme.song_title_accent)
+        .bg(theme.background)
+        .add_modifier(Modifier::BOLD);
+
+    let max_w = inner.width as usize;
+    let truncate = |s: &str| -> String {
+        let total = unicode_width::UnicodeWidthStr::width(s);
+        if total <= max_w {
+            return s.to_string();
+        }
+        if max_w == 0 {
+            return String::new();
+        }
+        if max_w == 1 {
+            return "…".to_string();
+        }
+        let target = max_w - 1;
+        let mut result = String::new();
+        let mut current_width = 0;
+        for ch in s.chars() {
+            let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+            if current_width + cw > target {
+                break;
+            }
+            result.push(ch);
+            current_width += cw;
+        }
+        result.push('…');
+        result
+    };
+
+    let text: Vec<Line<'static>> = match &player.lrc {
+        Some(entries) if !entries.is_empty() => {
+            let pos = player.position();
+            let (prev, curr, next) = match lrc::active_index(entries, pos) {
+                None => (
+                    String::new(),
+                    String::new(),
+                    entries
+                        .first()
+                        .map(|e| e.text.clone())
+                        .unwrap_or_default(),
+                ),
+                Some(i) => (
+                    if i > 0 {
+                        entries[i - 1].text.clone()
+                    } else {
+                        String::new()
+                    },
+                    entries[i].text.clone(),
+                    if i + 1 < entries.len() {
+                        entries[i + 1].text.clone()
+                    } else {
+                        String::new()
+                    },
+                ),
+            };
+            vec![
+                Line::styled(truncate(&prev), muted_style),
+                Line::styled(truncate(&curr), active_style),
+                Line::styled(truncate(&next), muted_style),
+            ]
+        }
+        _ => vec![
+            Line::styled(String::new(), muted_style),
+            Line::styled(
+                "No synced lyrics (.lrc file not found)".to_string(),
+                Style::default().fg(theme.text_muted).bg(theme.background),
+            ),
+            Line::styled(String::new(), muted_style),
+        ],
+    };
+
+    let p = Paragraph::new(Text::from(text)).style(Style::default().bg(theme.background));
+    f.render_widget(p, inner);
 }
 
 fn help_text(ui: &UiState) -> String {

@@ -5,6 +5,7 @@ mod app;
 mod audio;
 mod config;
 mod library;
+mod lrc;
 mod meta;
 mod player;
 mod term;

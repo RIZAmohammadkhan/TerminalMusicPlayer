@@ -1,7 +1,6 @@
 use std::{
     cmp::min,
-    fs,
-    io,
+    fs, io,
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
@@ -11,9 +10,10 @@ use rodio::Source;
 
 use crate::{
     audio,
-    library::Track,
-    meta::{self, TrackMeta},
     audio::{AudioControl, AudioOutput, VolumeControl},
+    library::Track,
+    lrc::{self, LrcEntry},
+    meta::{self, TrackMeta},
     util::{make_shuffled_order, SaturatingDurationSince},
 };
 
@@ -47,6 +47,7 @@ pub(crate) struct Player {
     pub(crate) total_duration: Option<Duration>,
 
     pub(crate) now_meta: TrackMeta,
+    pub(crate) lrc: Option<Vec<LrcEntry>>,
 
     pub(crate) loop_current: bool,
 
@@ -84,6 +85,7 @@ impl Player {
             total_duration: None,
 
             now_meta: TrackMeta::default(),
+            lrc: None,
 
             loop_current: false,
             library_path,
@@ -174,6 +176,7 @@ impl Player {
 
         // Prepare everything first. If decoding/seeking fails, keep the current sink playing.
         let meta = meta::probe_track_meta(&track).unwrap_or_default();
+        let lyrics = lrc::load_lrc(&track);
         let (source, total_duration) = open_source(&track, start_pos, self.loop_current)
             .with_context(|| format!("Failed to open track: {}", track.display()))?;
 
@@ -184,6 +187,7 @@ impl Player {
             .set_source(source, self.audio.channels, self.audio.sample_rate);
 
         self.now_meta = meta.clone();
+        self.lrc = lyrics;
         self.total_duration = total_duration.or(meta.duration);
         self.base_pos = start_pos;
         self.started_at = Some(Instant::now());
@@ -392,6 +396,7 @@ impl Player {
             self.total_pause = Duration::ZERO;
             self.total_duration = None;
             self.now_meta = TrackMeta::default();
+            self.lrc = None;
         }
 
         self.tracks.remove(idx);
@@ -457,7 +462,11 @@ impl Player {
                 let path = track.path.clone();
                 match open_source(&path, Duration::ZERO, false) {
                     Ok((source, _)) => {
-                        self.audio_ctl.set_next_source(source, self.audio.channels, self.audio.sample_rate);
+                        self.audio_ctl.set_next_source(
+                            source,
+                            self.audio.channels,
+                            self.audio.sample_rate,
+                        );
                     }
                     Err(_) => {
                         self.audio_ctl.clear_next_source();
@@ -484,8 +493,10 @@ impl Player {
             .clone();
 
         let meta = meta::probe_track_meta(&track).unwrap_or_default();
+        let lrc = lrc::load_lrc(&track);
         self.now_meta = meta.clone();
         self.total_duration = meta.duration.or_else(|| meta::probe_duration(&track).ok());
+        self.lrc = lrc;
         self.base_pos = Duration::ZERO;
         self.started_at = Some(Instant::now());
         self.paused_at = None;
