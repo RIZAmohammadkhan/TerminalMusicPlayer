@@ -64,27 +64,35 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
     let list_rect = left[0];
     let visible_rows = list_rect.height.saturating_sub(2) as usize;
 
-    let total = player.tracks.len();
-    let selected = if total == 0 {
+    let active_indices: Vec<usize> = if player.show_favorites {
+        player.tracks.iter().enumerate()
+            .filter(|(_, t)| player.favorites.contains(&t.path))
+            .map(|(i, _)| i)
+            .collect()
+    } else {
+        (0..player.tracks.len()).collect()
+    };
+
+    let total = active_indices.len();
+    let selected_local = if total == 0 {
         None
     } else {
-        Some(player.selected.min(total - 1))
+        active_indices.iter().position(|&i| i == player.selected).or(Some(0))
     };
 
     let (offset, items): (usize, Vec<ListItem>) = if total == 0 || visible_rows == 0 {
         (0, Vec::new())
     } else {
-        let selected = selected.unwrap_or(0);
+        let selected = selected_local.unwrap_or(0);
         let max_offset = total.saturating_sub(visible_rows);
         let mut offset = selected.saturating_sub(visible_rows.saturating_sub(1) / 2);
         offset = offset.min(max_offset);
 
         let end = (offset + visible_rows).min(total);
-        let items = player.tracks[offset..end]
+        let items = active_indices[offset..end]
             .iter()
-            .enumerate()
-            .map(|(local_i, t)| {
-                let i = offset + local_i;
+            .map(|&i| {
+                let t = &player.tracks[i];
                 let (prefix, prefix_style) = if i == player.current {
                     (
                         "▶ ",
@@ -103,8 +111,12 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
                     Style::default().fg(theme.text_primary).bg(theme.background)
                 };
 
+                let fav_prefix = if player.favorites.contains(&t.path) { "♥ " } else { "  " };
+                let fav_style = Style::default().fg(theme.playing_indicator).bg(theme.background);
+
                 ListItem::new(Line::from(vec![
                     Span::styled(prefix, prefix_style),
+                    Span::styled(fav_prefix.to_string(), fav_style),
                     Span::styled(t.display_name.clone(), name_style),
                 ]))
             })
@@ -114,7 +126,7 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
     };
 
     let mut state = ratatui::widgets::ListState::default();
-    state.select(selected.map(|s| s.saturating_sub(offset)));
+    state.select(selected_local.map(|s| s.saturating_sub(offset)));
 
     let list = List::new(items)
         .style(Style::default().fg(theme.text_primary).bg(theme.background))
@@ -125,7 +137,7 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
                 .border_style(Style::default().fg(theme.library_accent))
                 .style(Style::default().bg(theme.background))
                 .title(Title::from(Line::styled(
-                    "Library",
+                    if player.show_favorites { "Favorites" } else { "Library" },
                     Style::default()
                         .fg(theme.library_accent)
                         .bg(theme.background)
@@ -377,7 +389,8 @@ fn title_line(player: &Player, ui: &UiState) -> String {
     let lp = if player.loop_current { " • Loop" } else { "" };
     let sh = if player.shuffle { " • Shuffle" } else { "" };
     let backend = player.volume.label();
-    format!("State: {state} • Volume: {vol} [{backend}]{chord}{lp}{sh}")
+    let view = if player.show_favorites { " • Fav View" } else { "" };
+    format!("State: {state} • Volume: {vol} [{backend}]{chord}{lp}{sh}{view}")
 }
 
 fn now_playing_lines(player: &Player, _ui: &UiState, theme: &Theme) -> Vec<Line<'static>> {
@@ -531,6 +544,12 @@ fn hints_lines(player: &Player, ui: &UiState, theme: &Theme) -> Vec<Line<'static
         Span::raw("Press "),
         Span::styled("h", key),
         Span::raw(" for cheatsheet • "),
+        Span::styled("a", key),
+        Span::raw(" add to fav • "),
+        Span::styled("A", key),
+        Span::raw(" clear favs • "),
+        Span::styled("Tab", key),
+        Span::raw(" toggle fav view • "),
         Span::styled("F12", key),
         Span::raw(" hide/unhide • "),
         Span::styled("v", key),
