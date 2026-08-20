@@ -544,12 +544,6 @@ fn hints_lines(player: &Player, ui: &UiState, theme: &Theme) -> Vec<Line<'static
         Span::raw("Press "),
         Span::styled("h", key),
         Span::raw(" for cheatsheet • "),
-        Span::styled("a", key),
-        Span::raw(" add to fav • "),
-        Span::styled("A", key),
-        Span::raw(" clear favs • "),
-        Span::styled("Tab", key),
-        Span::raw(" toggle fav view • "),
         Span::styled("F12", key),
         Span::raw(" hide/unhide • "),
         Span::styled("v", key),
@@ -784,6 +778,10 @@ fn help_text(ui: &UiState) -> String {
         "",
         "Library",
         "  Enter       play selected",
+        "",
+        "Favourites",
+        "  a           add/remove selected track from favourites",
+        "  Tab         toggle favourites view",
     ]
     .join("\n")
 }

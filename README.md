@@ -188,7 +188,6 @@ Trix is designed to be used entirely without a mouse.
 | `p` | Seek backward 10s |
 | **Favorites** | |
 | `a` | Add/Remove selected track from favorites |
-| `A` | Clear all favorites |
 | `Tab` | Toggle between Library and Favorites view |
 | **Utility** | |
 | `S` | **Search** mode (Type to filter, `Enter` to play) |

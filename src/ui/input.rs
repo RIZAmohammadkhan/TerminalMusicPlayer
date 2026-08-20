@@ -328,12 +328,6 @@ pub(crate) fn handle_key(key: KeyEvent, player: &mut Player, ui: &mut UiState) -
         return Ok(UiAction::None);
     }
 
-    // Clear all favorites
-    if key.code == KeyCode::Char('A') {
-        player.clear_favorites();
-        return Ok(UiAction::None);
-    }
-
     // Quit
     if key.code == KeyCode::Char('q') {
         player.stop_playback();
