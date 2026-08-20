@@ -462,19 +462,6 @@ impl Player {
         }
     }
 
-    pub(crate) fn clear_favorites(&mut self) {
-        self.favorites.clear();
-        self.save_favorites();
-        if self.show_favorites {
-            self.rebuild_play_order();
-            if !self.play_order.is_empty() {
-                self.selected = self.play_order[0];
-            } else {
-                self.selected = 0;
-            }
-        }
-    }
-
     /// Re-discover tracks from the library directory and merge new ones in.
     pub(crate) fn refresh_tracks(&mut self) {
         use crate::library::discover_tracks;
