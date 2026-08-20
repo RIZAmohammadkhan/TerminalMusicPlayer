@@ -316,6 +316,24 @@ pub(crate) fn handle_key(key: KeyEvent, player: &mut Player, ui: &mut UiState) -
         return Ok(UiAction::None);
     }
 
+    // Tab toggles favorites view
+    if key.code == KeyCode::Tab {
+        player.set_favorites_view(!player.show_favorites);
+        return Ok(UiAction::None);
+    }
+
+    // Add selected track to favorites
+    if key.code == KeyCode::Char('a') {
+        player.toggle_favorite_selected();
+        return Ok(UiAction::None);
+    }
+
+    // Clear all favorites
+    if key.code == KeyCode::Char('A') {
+        player.clear_favorites();
+        return Ok(UiAction::None);
+    }
+
     // Quit
     if key.code == KeyCode::Char('q') {
         player.stop_playback();

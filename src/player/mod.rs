@@ -1,7 +1,7 @@
 use std::{
     cmp::min,
-    fs,
-    io,
+    collections::HashSet,
+    env, fs, io,
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
@@ -11,17 +11,18 @@ use rodio::Source;
 
 use crate::{
     audio,
-    library::Track,
-    meta::{self, TrackMeta},
     audio::{AudioControl, AudioOutput, VolumeControl},
+    library::Track,
+    lrc::{self, LrcEntry},
+    meta::{self, TrackMeta},
     util::{make_shuffled_order, SaturatingDurationSince},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PlayState {
-    Stopped,
-    Playing,
-    Paused,
+    Stopped = 0,
+    Playing = 1,
+    Paused = 2,
 }
 
 pub(crate) struct Player {
@@ -47,6 +48,9 @@ pub(crate) struct Player {
     pub(crate) total_duration: Option<Duration>,
 
     pub(crate) now_meta: TrackMeta,
+    pub(crate) lrc: Option<Vec<LrcEntry>>,
+    pub(crate) favorites: HashSet<PathBuf>,
+    pub(crate) show_favorites: bool,
 
     pub(crate) loop_current: bool,
 
@@ -84,6 +88,9 @@ impl Player {
             total_duration: None,
 
             now_meta: TrackMeta::default(),
+            lrc: None,
+            favorites: load_favorites(),
+            show_favorites: false,
 
             loop_current: false,
             library_path,
@@ -105,12 +112,66 @@ impl Player {
         }
 
         self.shuffle = !self.shuffle;
-        if self.shuffle {
-            self.play_order = make_shuffled_order(self.tracks.len(), self.current);
+        self.rebuild_play_order();
+    }
+
+    pub(crate) fn set_favorites_view(&mut self, show_favorites: bool) {
+        self.show_favorites = show_favorites;
+        self.rebuild_play_order();
+        if self.show_favorites
+            && !self.play_order.is_empty()
+            && !self.play_order.contains(&self.selected)
+        {
+            self.selected = self.play_order[0];
+        }
+    }
+
+    pub(crate) fn rebuild_play_order(&mut self) {
+        if !self.has_tracks() {
+            self.play_order.clear();
             self.play_pos = 0;
+            return;
+        }
+
+        if self.show_favorites {
+            let fav_indices: Vec<usize> = self
+                .tracks
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| self.favorites.contains(&t.path))
+                .map(|(i, _)| i)
+                .collect();
+
+            if fav_indices.is_empty() {
+                self.play_order.clear();
+                self.play_pos = 0;
+                return;
+            }
+
+            if self.shuffle {
+                let current_pos = fav_indices
+                    .iter()
+                    .position(|&i| i == self.current)
+                    .unwrap_or(0);
+                let shuffled_local = make_shuffled_order(fav_indices.len(), current_pos);
+                self.play_order = shuffled_local.iter().map(|&i| fav_indices[i]).collect();
+            } else {
+                self.play_order = fav_indices.clone();
+            }
+
+            self.play_pos = self
+                .play_order
+                .iter()
+                .position(|&i| i == self.current)
+                .unwrap_or(0);
         } else {
-            self.play_order = (0..self.tracks.len()).collect();
-            self.play_pos = self.current;
+            if self.shuffle {
+                self.play_order = make_shuffled_order(self.tracks.len(), self.current);
+                self.play_pos = 0;
+            } else {
+                self.play_order = (0..self.tracks.len()).collect();
+                self.play_pos = self.current;
+            }
         }
         self.prepare_next_track();
     }
@@ -174,6 +235,7 @@ impl Player {
 
         // Prepare everything first. If decoding/seeking fails, keep the current sink playing.
         let meta = meta::probe_track_meta(&track).unwrap_or_default();
+        let lyrics = lrc::load_lrc(&track);
         let (source, total_duration) = open_source(&track, start_pos, self.loop_current)
             .with_context(|| format!("Failed to open track: {}", track.display()))?;
 
@@ -184,6 +246,7 @@ impl Player {
             .set_source(source, self.audio.channels, self.audio.sample_rate);
 
         self.now_meta = meta.clone();
+        self.lrc = lyrics;
         self.total_duration = total_duration.or(meta.duration);
         self.base_pos = start_pos;
         self.started_at = Some(Instant::now());
@@ -212,6 +275,37 @@ impl Player {
             PlayState::Stopped => {
                 // no-op
             }
+        }
+    }
+
+    /// MPRIS Play: resume if paused, start from beginning if stopped.
+    pub(crate) fn play(&mut self) -> Result<()> {
+        match self.state {
+            PlayState::Playing => Ok(()),
+            PlayState::Paused => {
+                self.audio_ctl.set_paused(false);
+                self.state = PlayState::Playing;
+                if let Some(paused_at) = self.paused_at.take() {
+                    self.total_pause += paused_at.elapsed();
+                }
+                Ok(())
+            }
+            PlayState::Stopped => {
+                if self.has_tracks() {
+                    self.start_track(Duration::ZERO)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    }
+
+    /// MPRIS Pause: pause if currently playing; no-op otherwise.
+    pub(crate) fn pause(&mut self) {
+        if self.state == PlayState::Playing {
+            self.audio_ctl.set_paused(true);
+            self.state = PlayState::Paused;
+            self.paused_at = Some(Instant::now());
         }
     }
 
@@ -309,14 +403,75 @@ impl Player {
     }
 
     pub(crate) fn select_up(&mut self) {
-        if self.selected > 0 {
-            self.selected -= 1;
+        if !self.has_tracks() {
+            return;
+        }
+        if self.show_favorites && !self.play_order.is_empty() {
+            let current_pos = self
+                .play_order
+                .iter()
+                .position(|&i| i == self.selected)
+                .unwrap_or(0);
+            let next_pos = if current_pos == 0 {
+                self.play_order.len() - 1
+            } else {
+                current_pos - 1
+            };
+            self.selected = self.play_order[next_pos];
+        } else {
+            if self.selected > 0 {
+                self.selected -= 1;
+            }
         }
     }
 
     pub(crate) fn select_down(&mut self) {
-        if self.selected + 1 < self.tracks.len() {
-            self.selected += 1;
+        if !self.has_tracks() {
+            return;
+        }
+        if self.show_favorites && !self.play_order.is_empty() {
+            let current_pos = self
+                .play_order
+                .iter()
+                .position(|&i| i == self.selected)
+                .unwrap_or(0);
+            let next_pos = (current_pos + 1) % self.play_order.len();
+            self.selected = self.play_order[next_pos];
+        } else {
+            if self.selected + 1 < self.tracks.len() {
+                self.selected += 1;
+            }
+        }
+    }
+
+    pub(crate) fn toggle_favorite_selected(&mut self) {
+        if let Some(track) = self.tracks.get(self.selected) {
+            let path = track.path.clone();
+            if self.favorites.contains(&path) {
+                self.favorites.remove(&path);
+            } else {
+                self.favorites.insert(path);
+            }
+            self.save_favorites();
+            if self.show_favorites {
+                self.rebuild_play_order();
+                if !self.play_order.is_empty() && !self.play_order.contains(&self.selected) {
+                    self.selected = self.play_order[0];
+                }
+            }
+        }
+    }
+
+    pub(crate) fn clear_favorites(&mut self) {
+        self.favorites.clear();
+        self.save_favorites();
+        if self.show_favorites {
+            self.rebuild_play_order();
+            if !self.play_order.is_empty() {
+                self.selected = self.play_order[0];
+            } else {
+                self.selected = 0;
+            }
         }
     }
 
@@ -344,15 +499,7 @@ impl Player {
             // Re-sort the full list.
             self.tracks.sort_by(|a, b| a.path.cmp(&b.path));
 
-            // Recompute shuffle order.
-            if self.shuffle {
-                self.play_order = make_shuffled_order(self.tracks.len(), self.current);
-                self.play_pos = 0;
-            } else {
-                self.play_order = (0..self.tracks.len()).collect();
-                self.sync_play_pos();
-            }
-            self.prepare_next_track();
+            self.rebuild_play_order();
         }
     }
 
@@ -382,6 +529,9 @@ impl Player {
             }
         }
 
+        self.favorites.remove(&path);
+        self.save_favorites();
+
         if deleting_current {
             self.audio_ctl.stop_now();
             self.state = PlayState::Stopped;
@@ -392,6 +542,7 @@ impl Player {
             self.total_pause = Duration::ZERO;
             self.total_duration = None;
             self.now_meta = TrackMeta::default();
+            self.lrc = None;
         }
 
         self.tracks.remove(idx);
@@ -416,13 +567,7 @@ impl Player {
 
         self.selected = self.selected.min(self.tracks.len().saturating_sub(1));
 
-        if self.shuffle {
-            self.play_order = make_shuffled_order(self.tracks.len(), self.current);
-            self.play_pos = 0;
-        } else {
-            self.play_order = (0..self.tracks.len()).collect();
-            self.play_pos = self.current;
-        }
+        self.rebuild_play_order();
 
         if deleting_current && was_playing_or_paused {
             self.selected = self.current;
@@ -457,7 +602,11 @@ impl Player {
                 let path = track.path.clone();
                 match open_source(&path, Duration::ZERO, false) {
                     Ok((source, _)) => {
-                        self.audio_ctl.set_next_source(source, self.audio.channels, self.audio.sample_rate);
+                        self.audio_ctl.set_next_source(
+                            source,
+                            self.audio.channels,
+                            self.audio.sample_rate,
+                        );
                     }
                     Err(_) => {
                         self.audio_ctl.clear_next_source();
@@ -484,8 +633,10 @@ impl Player {
             .clone();
 
         let meta = meta::probe_track_meta(&track).unwrap_or_default();
+        let lrc = lrc::load_lrc(&track);
         self.now_meta = meta.clone();
         self.total_duration = meta.duration.or_else(|| meta::probe_duration(&track).ok());
+        self.lrc = lrc;
         self.base_pos = Duration::ZERO;
         self.started_at = Some(Instant::now());
         self.paused_at = None;
@@ -502,6 +653,45 @@ impl Drop for Player {
         // Make best-effort to stop audio immediately on any exit path.
         // (E.g. terminal closed -> SIGHUP, or event I/O error.)
         self.stop_playback();
+    }
+}
+
+fn favorites_path() -> Option<PathBuf> {
+    let base = env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+
+    Some(base.join("trix").join("favorites.txt"))
+}
+
+fn load_favorites() -> HashSet<PathBuf> {
+    let mut favs = HashSet::new();
+    if let Some(path) = favorites_path() {
+        if let Ok(content) = fs::read_to_string(&path) {
+            for line in content.lines() {
+                let p = PathBuf::from(line.trim());
+                if p.exists() {
+                    favs.insert(p);
+                }
+            }
+        }
+    }
+    favs
+}
+
+impl Player {
+    fn save_favorites(&self) {
+        if let Some(path) = favorites_path() {
+            if let Some(parent) = path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            let content: Vec<String> = self
+                .favorites
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect();
+            let _ = fs::write(path, content.join("\n"));
+        }
     }
 }
 

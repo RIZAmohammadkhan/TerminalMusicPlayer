@@ -16,6 +16,7 @@ keywords = ["music", "player", "tui", "terminal", "audio"]
 categories = ["command-line-utilities", "multimedia::audio"]
 
 [dependencies]
+zbus = "3"
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
 ratatui = "0.29"

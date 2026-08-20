@@ -15,7 +15,8 @@ use crate::{
     audio::AudioOutput,
     config::Config,
     library::{default_library_path, discover_tracks},
-    player::Player,
+    mpris::{self, MprisCommand, MprisState},
+    player::{PlayState, Player},
     term::{hide_to_shell_toggleable, init_terminal, TerminalCleanup},
     ui::{draw_ui, handle_key, UiAction, UiState},
 };
@@ -73,6 +74,13 @@ pub(crate) fn run() -> Result<()> {
     let tracks = discover_tracks(&library_path)?;
     let mut player = Player::new(tracks, args.index, audio, library_path.clone())?;
 
+    // MPRIS: expose play/pause/stop via D-Bus so external controllers work.
+    let mpris_state = MprisState::new();
+    let (mpris_tx, mpris_rx) = std::sync::mpsc::channel();
+    if let Err(e) = mpris::spawn_mpris_server(mpris_tx, mpris_state.clone()) {
+        eprintln!("trix: mpris: failed to start server: {e}");
+    }
+
     // Auto-start first track if any
     if player.has_tracks() {
         player.start_track(Duration::ZERO)?;
@@ -89,6 +97,33 @@ pub(crate) fn run() -> Result<()> {
             audio_ctl.shutdown_now();
             player.stop_playback();
             break;
+        }
+
+        // Process MPRIS commands (play/pause/stop from external controllers).
+        while let Ok(cmd) = mpris_rx.try_recv() {
+            match cmd {
+                MprisCommand::Play => {
+                    let _ = player.play();
+                }
+                MprisCommand::Pause => {
+                    player.pause();
+                }
+                MprisCommand::Stop => {
+                    player.stop_playback();
+                }
+                MprisCommand::PlayPause => match player.state {
+                    PlayState::Playing => player.pause(),
+                    _ => {
+                        let _ = player.play();
+                    }
+                },
+                MprisCommand::Next => {
+                    let _ = player.next_track();
+                }
+                MprisCommand::Previous => {
+                    let _ = player.prev_track();
+                }
+            }
         }
 
         player.refresh_volume();
@@ -123,6 +158,9 @@ pub(crate) fn run() -> Result<()> {
                 }
             }
         }
+
+        // Sync MPRIS playback state for D-Bus property queries.
+        mpris_state.set(player.state);
 
         let timeout = tick_rate
             .checked_sub(ui.last_tick.elapsed())
