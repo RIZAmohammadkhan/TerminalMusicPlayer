@@ -95,11 +95,20 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
                 let t = &player.tracks[i];
                 let (prefix, prefix_style) = if i == player.current {
                     (
-                        "▶ ",
-                        Style::default().fg(theme.playing_indicator).bg(theme.background),
+                        format!("{:>2}▶", i + 1),
+                        Style::default().fg(theme.playing_indicator).bg(theme.background).add_modifier(Modifier::BOLD),
+                    )
+                } else if i == player.selected {
+                    (
+                        format!("{:>2} ", i + 1),
+                        Style::default().fg(theme.text_primary).bg(theme.background).add_modifier(Modifier::BOLD),
                     )
                 } else {
-                    ("  ", Style::default().fg(theme.text_primary).bg(theme.background))
+                    let rel = i.abs_diff(player.selected);
+                    (
+                        format!("{:>2} ", rel),
+                        Style::default().fg(theme.text_muted).bg(theme.background),
+                    )
                 };
 
                 let name_style = if i == player.current {
@@ -546,6 +555,10 @@ fn hints_lines(player: &Player, ui: &UiState, theme: &Theme) -> Vec<Line<'static
         Span::raw(" for cheatsheet • "),
         Span::styled("F12", key),
         Span::raw(" hide/unhide • "),
+        Span::styled("[count]", key),
+        Span::raw(" prefix motions (e.g. "),
+        Span::styled("5j", key),
+        Span::raw(") • "),
         Span::styled("v", key),
         Span::raw(" volume mode • "),
         Span::styled("S", key),
@@ -750,6 +763,7 @@ fn help_text(ui: &UiState) -> String {
         "  h or ?      toggle this help",
         "  F12        hide/unhide (shell; press again to return)",
         "  q           quit",
+        "  [count]     prefix for motions (e.g. 5j, 3p, 2Enter)",
         "  s           toggle shuffle order",
         "  S           search library (type to select)",
         "  m           move to timestamp (e.g. 1:30)",

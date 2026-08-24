@@ -29,6 +29,7 @@ pub(crate) struct UiState {
     last_seek_at: Instant,
     pub(crate) delete_confirm: Option<DeleteConfirm>,
     pub(crate) last_tick: Instant,
+    pub(crate) count: Option<u32>,
     // YouTube download mode
     pub(crate) youtube_dl_mode: bool,
     pub(crate) youtube_dl_url: String,
@@ -64,6 +65,7 @@ impl UiState {
             last_seek_at: Instant::now() - Duration::from_millis(500),
             delete_confirm: None,
             last_tick: Instant::now(),
+            count: None,
             youtube_dl_mode: false,
             youtube_dl_url: String::new(),
             youtube_dl_status: Arc::new(Mutex::new(YtDlStatus::Idle)),
@@ -81,6 +83,7 @@ impl UiState {
         self.move_query.clear();
         self.move_error = None;
         self.delete_confirm = None;
+        self.count = None;
         self.youtube_dl_mode = false;
         self.youtube_dl_url.clear();
     }
@@ -109,6 +112,22 @@ pub(crate) fn handle_key(key: KeyEvent, player: &mut Player, ui: &mut UiState) -
         player.stop_playback();
         return Ok(UiAction::Quit);
     }
+
+    // Capture count prefix for vim-style motions (e.g. 5j, 10k, 3p)
+    if !ui.search_mode && !ui.move_mode && !ui.youtube_dl_mode && !ui.show_help && !ui.volume_mode {
+        if let KeyCode::Char(c) = key.code {
+            if c.is_ascii_digit() {
+                let d = c.to_digit(10).unwrap();
+                let next = ui.count.unwrap_or(0) * 10 + d;
+                if next <= 9999 {
+                    ui.count = Some(next);
+                }
+                return Ok(UiAction::None);
+            }
+        }
+    }
+
+    let count = ui.count.take().unwrap_or(1).max(1);
 
     // Search mode captures all typing so it doesn't trigger other bindings.
     if ui.search_mode {
@@ -427,20 +446,24 @@ pub(crate) fn handle_key(key: KeyEvent, player: &mut Player, ui: &mut UiState) -
         KeyCode::Char('p') => {
             // 10s back
             if is_press {
-                let _ = player.seek_relative(-10_000);
+                let _ = player.seek_relative(-10_000 * count as i64);
             }
         }
         KeyCode::Char('n') => {
             // 10s forward
             if is_press {
-                let _ = player.seek_relative(10_000);
+                let _ = player.seek_relative(10_000 * count as i64);
             }
         }
         KeyCode::Char('P') => {
-            let _ = player.prev_track();
+            for _ in 0..count {
+                let _ = player.prev_track();
+            }
         }
         KeyCode::Char('N') => {
-            let _ = player.next_track();
+            for _ in 0..count {
+                let _ = player.next_track();
+            }
         }
         KeyCode::Left => {
             if is_repeat {
@@ -456,7 +479,7 @@ pub(crate) fn handle_key(key: KeyEvent, player: &mut Player, ui: &mut UiState) -
             if is_press {
                 ui.last_seek_key = Some(KeyCode::Left);
                 ui.last_seek_at = Instant::now();
-                let _ = player.seek_relative(-5_000);
+                let _ = player.seek_relative(-5_000 * count as i64);
             }
         }
         KeyCode::Right => {
@@ -472,7 +495,7 @@ pub(crate) fn handle_key(key: KeyEvent, player: &mut Player, ui: &mut UiState) -
             if is_press {
                 ui.last_seek_key = Some(KeyCode::Right);
                 ui.last_seek_at = Instant::now();
-                let _ = player.seek_relative(5_000);
+                let _ = player.seek_relative(5_000 * count as i64);
             }
         }
         KeyCode::Char('v') => {
@@ -516,21 +539,32 @@ pub(crate) fn handle_key(key: KeyEvent, player: &mut Player, ui: &mut UiState) -
         // Nice-to-have navigation
         KeyCode::Up | KeyCode::Char('k') => {
             if ui.volume_mode {
-                player.adjust_volume(0.05);
+                for _ in 0..count {
+                    player.adjust_volume(0.05);
+                }
             } else {
-                player.select_up();
+                for _ in 0..count {
+                    player.select_up();
+                }
                 ui.delete_confirm = None;
             }
         }
         KeyCode::Down | KeyCode::Char('j') => {
             if ui.volume_mode {
-                player.adjust_volume(-0.05);
+                for _ in 0..count {
+                    player.adjust_volume(-0.05);
+                }
             } else {
-                player.select_down();
+                for _ in 0..count {
+                    player.select_down();
+                }
                 ui.delete_confirm = None;
             }
         }
         KeyCode::Enter => {
+            for _ in 1..count {
+                player.select_down();
+            }
             player.play_selected()?;
             ui.delete_confirm = None;
         }
