@@ -89,25 +89,37 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
         offset = offset.min(max_offset);
 
         let end = (offset + visible_rows).min(total);
+        // Calculate fixed width for line numbers based on total tracks
+        let num_width = if show_line_numbers {
+            player.tracks.len().to_string().len().max(2)
+        } else {
+            0
+        };
         let items = active_indices[offset..end]
             .iter()
-            .map(|&i| {
+            .enumerate()
+            .map(|(vis_idx, &i)| {
                 let t = &player.tracks[i];
+                // In favorites view, this gives 1..N for the favorites list.
+                // In normal view, it gives 1..N for the whole library (matches i+1).
+                let abs_idx = offset + vis_idx + 1;
+                let sel_local = selected_local.unwrap_or(0);
                 let (prefix, prefix_style) = if show_line_numbers {
                     if i == player.current {
                         (
-                            format!("{:>2} ▶", i + 1),
+                            format!("{:>width$} ▶", abs_idx, width = num_width),
                             Style::default().fg(theme.playing_indicator).bg(theme.background).add_modifier(Modifier::BOLD),
                         )
                     } else if i == player.selected {
                         (
-                            format!("{:>2}  ", i + 1),
+                            format!("{:>width$}  ", abs_idx, width = num_width),
                             Style::default().fg(theme.text_primary).bg(theme.background).add_modifier(Modifier::BOLD),
                         )
                     } else {
-                        let rel = i.abs_diff(player.selected);
+                        // Use visual position for relative numbers so favorites view works correctly
+                        let rel = (offset + vis_idx).abs_diff(sel_local);
                         (
-                            format!("{:>2}  ", rel),
+                            format!("{:>width$}  ", rel, width = num_width),
                             Style::default().fg(theme.text_muted).bg(theme.background),
                         )
                     }
@@ -775,6 +787,7 @@ fn help_text(ui: &UiState) -> String {
         "  F12        hide/unhide (shell; press again to return)",
         "  q           quit",
         "  [count]     prefix for motions (e.g. 5j, 3p, 2Enter)",
+        "  g / G       go to top / bottom (or [count]G for absolute jump)",
         "  s           toggle shuffle order",
         "  S           search library (type to select)",
         "  m           move to timestamp (e.g. 1:30)",

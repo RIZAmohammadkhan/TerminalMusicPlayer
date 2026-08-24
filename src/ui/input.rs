@@ -30,7 +30,6 @@ pub(crate) struct UiState {
     pub(crate) delete_confirm: Option<DeleteConfirm>,
     pub(crate) last_tick: Instant,
     pub(crate) count: Option<u32>,
-    pub(crate) pending_g: bool,
     // YouTube download mode
     pub(crate) youtube_dl_mode: bool,
     pub(crate) youtube_dl_url: String,
@@ -67,7 +66,6 @@ impl UiState {
             delete_confirm: None,
             last_tick: Instant::now(),
             count: None,
-            pending_g: false,
             youtube_dl_mode: false,
             youtube_dl_url: String::new(),
             youtube_dl_status: Arc::new(Mutex::new(YtDlStatus::Idle)),
@@ -86,7 +84,6 @@ impl UiState {
         self.move_error = None;
         self.delete_confirm = None;
         self.count = None;
-        self.pending_g = false;
         self.youtube_dl_mode = false;
         self.youtube_dl_url.clear();
     }
@@ -121,11 +118,14 @@ pub(crate) fn handle_key(key: KeyEvent, player: &mut Player, ui: &mut UiState) -
         if let KeyCode::Char(c) = key.code {
             if c.is_ascii_digit() {
                 let d = c.to_digit(10).unwrap();
-                let next = ui.count.unwrap_or(0) * 10 + d;
-                if next <= 9999 {
-                    ui.count = Some(next);
+                // Ignore leading 0 if no count is active (matches Vim behavior)
+                if !(d == 0 && ui.count.is_none()) {
+                    let next = ui.count.unwrap_or(0) * 10 + d;
+                    if next <= 9999 {
+                        ui.count = Some(next);
+                    }
+                    return Ok(UiAction::None);
                 }
-                return Ok(UiAction::None);
             }
         }
     }
@@ -133,29 +133,32 @@ pub(crate) fn handle_key(key: KeyEvent, player: &mut Player, ui: &mut UiState) -
     let count_opt = ui.count.take();
     let count = count_opt.unwrap_or(1).max(1);
 
-    // Handle 'gg' sequence (go to top)
+    // Handle 'g' (go to top or absolute line with count)
     if !ui.show_help && !ui.search_mode && !ui.move_mode && !ui.youtube_dl_mode && !ui.volume_mode {
         if key.code == KeyCode::Char('g') {
-            if ui.pending_g {
-                ui.pending_g = false;
-                if player.has_tracks() {
+            if player.has_tracks() {
+                if count_opt.is_some() {
+                    let target_visual = (count as usize).saturating_sub(1);
+                    if player.show_favorites && !player.play_order.is_empty() {
+                        if target_visual < player.play_order.len() {
+                            player.selected = player.play_order[target_visual];
+                        } else {
+                            player.selected = *player.play_order.last().unwrap();
+                        }
+                    } else {
+                        let target = target_visual.min(player.tracks.len().saturating_sub(1));
+                        player.selected = target;
+                    }
+                } else {
                     if player.show_favorites && !player.play_order.is_empty() {
                         player.selected = player.play_order[0];
                     } else {
                         player.selected = 0;
                     }
-                    ui.delete_confirm = None;
                 }
-                return Ok(UiAction::None);
-            } else {
-                ui.pending_g = true;
-                return Ok(UiAction::None);
+                ui.delete_confirm = None;
             }
-        }
-
-        // If any other key is pressed, cancel pending_g
-        if ui.pending_g {
-            ui.pending_g = false;
+            return Ok(UiAction::None);
         }
     }
 
@@ -501,8 +504,17 @@ pub(crate) fn handle_key(key: KeyEvent, player: &mut Player, ui: &mut UiState) -
             }
             if count_opt.is_some() {
                 // e.g. 5G -> go to track index 4 (0-based)
-                let target = (count as usize).saturating_sub(1).min(player.tracks.len().saturating_sub(1));
-                player.selected = target;
+                let target_visual = (count as usize).saturating_sub(1);
+                if player.show_favorites && !player.play_order.is_empty() {
+                    if target_visual < player.play_order.len() {
+                        player.selected = player.play_order[target_visual];
+                    } else {
+                        player.selected = *player.play_order.last().unwrap();
+                    }
+                } else {
+                    let target = target_visual.min(player.tracks.len().saturating_sub(1));
+                    player.selected = target;
+                }
             } else {
                 if player.show_favorites && !player.play_order.is_empty() {
                     player.selected = *player.play_order.last().unwrap();
