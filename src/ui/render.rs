@@ -96,18 +96,18 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
                 let (prefix, prefix_style) = if show_line_numbers {
                     if i == player.current {
                         (
-                            format!("{:>2}▶", i + 1),
+                            format!("{:>2} ▶", i + 1),
                             Style::default().fg(theme.playing_indicator).bg(theme.background).add_modifier(Modifier::BOLD),
                         )
                     } else if i == player.selected {
                         (
-                            format!("{:>2} ", i + 1),
+                            format!("{:>2}  ", i + 1),
                             Style::default().fg(theme.text_primary).bg(theme.background).add_modifier(Modifier::BOLD),
                         )
                     } else {
                         let rel = i.abs_diff(player.selected);
                         (
-                            format!("{:>2} ", rel),
+                            format!("{:>2}  ", rel),
                             Style::default().fg(theme.text_muted).bg(theme.background),
                         )
                     }
