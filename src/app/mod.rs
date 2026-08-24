@@ -41,7 +41,8 @@ pub(crate) fn run() -> Result<()> {
     let args = Args::parse();
 
     let config = Config::load();
-    let theme = config.theme;
+    let theme = config.theme.clone();
+    let show_line_numbers = config.ui.line_numbers;
 
     let library_path = args.path.unwrap_or_else(default_library_path);
 
@@ -128,7 +129,7 @@ pub(crate) fn run() -> Result<()> {
 
         player.refresh_volume();
 
-        if terminal.draw(|f| draw_ui(f, &player, &ui, &theme)).is_err() {
+        if terminal.draw(|f| draw_ui(f, &player, &ui, &theme, show_line_numbers)).is_err() {
             // Terminal likely closed (broken pipe / pty hangup). Treat as a clean quit.
             audio_ctl.shutdown_now();
             player.stop_playback();

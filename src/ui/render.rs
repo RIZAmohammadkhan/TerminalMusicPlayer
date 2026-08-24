@@ -16,7 +16,13 @@ use crate::{
 
 use super::input::UiState;
 
-pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Theme) {
+pub(crate) fn draw_ui(
+    f: &mut Frame,
+    player: &Player,
+    ui: &UiState,
+    theme: &Theme,
+    show_line_numbers: bool,
+) {
     let area = f.area();
 
     // Fill the entire frame with the theme background.
@@ -65,7 +71,10 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
     let visible_rows = list_rect.height.saturating_sub(2) as usize;
 
     let active_indices: Vec<usize> = if player.show_favorites {
-        player.tracks.iter().enumerate()
+        player
+            .tracks
+            .iter()
+            .enumerate()
             .filter(|(_, t)| player.favorites.contains(&t.path))
             .map(|(i, _)| i)
             .collect()
@@ -77,7 +86,10 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
     let selected_local = if total == 0 {
         None
     } else {
-        active_indices.iter().position(|&i| i == player.selected).or(Some(0))
+        active_indices
+            .iter()
+            .position(|&i| i == player.selected)
+            .or(Some(0))
     };
 
     let (offset, items): (usize, Vec<ListItem>) = if total == 0 || visible_rows == 0 {
@@ -89,17 +101,60 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
         offset = offset.min(max_offset);
 
         let end = (offset + visible_rows).min(total);
+        // Calculate fixed width for line numbers based on total tracks
+        let num_width = if show_line_numbers {
+            player.tracks.len().to_string().len().max(2)
+        } else {
+            0
+        };
         let items = active_indices[offset..end]
             .iter()
-            .map(|&i| {
+            .enumerate()
+            .map(|(vis_idx, &i)| {
                 let t = &player.tracks[i];
-                let (prefix, prefix_style) = if i == player.current {
-                    (
-                        "▶ ",
-                        Style::default().fg(theme.playing_indicator).bg(theme.background),
-                    )
+                // In favorites view, this gives 1..N for the favorites list.
+                // In normal view, it gives 1..N for the whole library (matches i+1).
+                let abs_idx = offset + vis_idx + 1;
+                let sel_local = selected_local.unwrap_or(0);
+                let (prefix, prefix_style) = if show_line_numbers {
+                    if i == player.current {
+                        (
+                            format!("{:>width$} ▶", abs_idx, width = num_width),
+                            Style::default()
+                                .fg(theme.playing_indicator)
+                                .bg(theme.background)
+                                .add_modifier(Modifier::BOLD),
+                        )
+                    } else if i == player.selected {
+                        (
+                            format!("{:>width$}  ", abs_idx, width = num_width),
+                            Style::default()
+                                .fg(theme.text_primary)
+                                .bg(theme.background)
+                                .add_modifier(Modifier::BOLD),
+                        )
+                    } else {
+                        // Use visual position for relative numbers so favorites view works correctly
+                        let rel = (offset + vis_idx).abs_diff(sel_local);
+                        (
+                            format!("{:>width$}  ", rel, width = num_width),
+                            Style::default().fg(theme.text_muted).bg(theme.background),
+                        )
+                    }
                 } else {
-                    ("  ", Style::default().fg(theme.text_primary).bg(theme.background))
+                    if i == player.current {
+                        (
+                            "▶ ".to_string(),
+                            Style::default()
+                                .fg(theme.playing_indicator)
+                                .bg(theme.background),
+                        )
+                    } else {
+                        (
+                            "  ".to_string(),
+                            Style::default().fg(theme.text_primary).bg(theme.background),
+                        )
+                    }
                 };
 
                 let name_style = if i == player.current {
@@ -111,8 +166,14 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
                     Style::default().fg(theme.text_primary).bg(theme.background)
                 };
 
-                let fav_prefix = if player.favorites.contains(&t.path) { "♥ " } else { "  " };
-                let fav_style = Style::default().fg(theme.playing_indicator).bg(theme.background);
+                let fav_prefix = if player.favorites.contains(&t.path) {
+                    "♥ "
+                } else {
+                    "  "
+                };
+                let fav_style = Style::default()
+                    .fg(theme.playing_indicator)
+                    .bg(theme.background);
 
                 ListItem::new(Line::from(vec![
                     Span::styled(prefix, prefix_style),
@@ -137,7 +198,11 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
                 .border_style(Style::default().fg(theme.library_accent))
                 .style(Style::default().bg(theme.background))
                 .title(Title::from(Line::styled(
-                    if player.show_favorites { "Favorites" } else { "Library" },
+                    if player.show_favorites {
+                        "Favorites"
+                    } else {
+                        "Library"
+                    },
                     Style::default()
                         .fg(theme.library_accent)
                         .bg(theme.background)
@@ -162,7 +227,11 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
             match &*status {
                 YtDlStatus::Idle => None,
                 YtDlStatus::Downloading(url) => {
-                    let short = if url.len() > 40 { &url[..40] } else { url.as_str() };
+                    let short = if url.len() > 40 {
+                        &url[..40]
+                    } else {
+                        url.as_str()
+                    };
                     Some((format!("⏳ Downloading {short}…"), theme.title_accent))
                 }
                 YtDlStatus::Done(msg, _) => Some((msg.clone(), theme.library_accent)),
@@ -339,7 +408,11 @@ pub(crate) fn draw_ui(f: &mut Frame, player: &Player, ui: &UiState, theme: &Them
         for yy in inner.y..inner.y.saturating_add(inner.height) {
             for xx in inner.x..inner.x.saturating_add(inner.width) {
                 let rel = xx.saturating_sub(inner.x);
-                let style = if rel < fill_cols { filled_style } else { empty_style };
+                let style = if rel < fill_cols {
+                    filled_style
+                } else {
+                    empty_style
+                };
                 if let Some(cell) = buf.cell_mut((xx, yy)) {
                     cell.set_symbol(" ").set_style(style);
                 }
@@ -384,12 +457,20 @@ fn title_line(player: &Player, ui: &UiState) -> String {
     };
 
     let vol = format!("{:.0}%", player.volume.display() * 100.0);
-    let chord = if ui.volume_mode { " (v: volume mode)" } else { "" };
+    let chord = if ui.volume_mode {
+        " (v: volume mode)"
+    } else {
+        ""
+    };
 
     let lp = if player.loop_current { " • Loop" } else { "" };
     let sh = if player.shuffle { " • Shuffle" } else { "" };
     let backend = player.volume.label();
-    let view = if player.show_favorites { " • Fav View" } else { "" };
+    let view = if player.show_favorites {
+        " • Fav View"
+    } else {
+        ""
+    };
     format!("State: {state} • Volume: {vol} [{backend}]{chord}{lp}{sh}{view}")
 }
 
@@ -442,7 +523,11 @@ fn now_playing_lines(player: &Player, _ui: &UiState, theme: &Theme) -> Vec<Line<
             Span::styled("Index:", key),
             Span::raw(format!(
                 "  {} / {}",
-                if player.has_tracks() { player.current + 1 } else { 0 },
+                if player.has_tracks() {
+                    player.current + 1
+                } else {
+                    0
+                },
                 player.tracks.len()
             )),
         ]),
@@ -452,14 +537,14 @@ fn now_playing_lines(player: &Player, _ui: &UiState, theme: &Theme) -> Vec<Line<
 fn key_style(theme: &Theme) -> Style {
     Style::default()
         .fg(theme.key_accent)
-    .bg(theme.background)
+        .bg(theme.background)
         .add_modifier(Modifier::BOLD)
 }
 
 fn heading_style(theme: &Theme) -> Style {
     Style::default()
         .fg(theme.title_accent)
-    .bg(theme.background)
+        .bg(theme.background)
         .add_modifier(Modifier::BOLD)
 }
 
@@ -699,10 +784,7 @@ fn draw_lyrics(f: &mut Frame, area: Rect, player: &Player, theme: &Theme) {
                 None => (
                     String::new(),
                     String::new(),
-                    entries
-                        .first()
-                        .map(|e| e.text.clone())
-                        .unwrap_or_default(),
+                    entries.first().map(|e| e.text.clone()).unwrap_or_default(),
                 ),
                 Some(i) => (
                     if i > 0 {
@@ -750,6 +832,8 @@ fn help_text(ui: &UiState) -> String {
         "  h or ?      toggle this help",
         "  F12        hide/unhide (shell; press again to return)",
         "  q           quit",
+        "  [count]     prefix for motions (e.g. 5j, 3p, 2Enter)",
+        "  g / G       go to top / bottom (or [count]G for absolute jump)",
         "  s           toggle shuffle order",
         "  S           search library (type to select)",
         "  m           move to timestamp (e.g. 1:30)",
@@ -818,11 +902,7 @@ fn draw_help_overlay(f: &mut Frame, player: &Player, ui: &UiState, theme: &Theme
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .title_top(base_header)
-        .style(
-            Style::default()
-                .fg(theme.text_primary)
-                .bg(theme.background),
-        );
+        .style(Style::default().fg(theme.text_primary).bg(theme.background));
 
     if !indicator.is_empty() {
         block = block.title_bottom(
@@ -830,20 +910,18 @@ fn draw_help_overlay(f: &mut Frame, player: &Player, ui: &UiState, theme: &Theme
                 indicator,
                 Style::default().fg(theme.text_muted).bg(theme.background),
             )
-                .alignment(Alignment::Right),
+            .alignment(Alignment::Right),
         );
     }
 
-    let styled_lines: Vec<Line<'static>> =
-        lines.into_iter().map(|l| stylize_help_line(l, theme)).collect();
+    let styled_lines: Vec<Line<'static>> = lines
+        .into_iter()
+        .map(|l| stylize_help_line(l, theme))
+        .collect();
     let p = Paragraph::new(Text::from(styled_lines))
         .block(block)
         .scroll((scroll, 0))
-        .style(
-            Style::default()
-                .fg(theme.text_primary)
-                .bg(theme.background),
-        );
+        .style(Style::default().fg(theme.text_primary).bg(theme.background));
 
     f.render_widget(p, overlay);
 }

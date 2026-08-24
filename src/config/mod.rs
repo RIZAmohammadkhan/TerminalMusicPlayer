@@ -7,12 +7,27 @@ use serde::Deserialize;
 #[derive(Debug, Clone)]
 pub struct Config {
     pub theme: Theme,
+    pub ui: Ui,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             theme: Theme::default(),
+            ui: Ui::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Ui {
+    pub line_numbers: bool,
+}
+
+impl Default for Ui {
+    fn default() -> Self {
+        Self {
+            line_numbers: false,
         }
     }
 }
@@ -99,6 +114,12 @@ impl Default for Theme {
 #[derive(Debug, Default, Deserialize)]
 struct RawConfig {
     theme: Option<RawTheme>,
+    ui: Option<RawUi>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RawUi {
+    line_numbers: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -137,6 +158,11 @@ fn load_from_path(path: &PathBuf) -> Result<Config> {
     let mut cfg = Config::default();
     if let Some(theme) = raw.theme {
         apply_theme(&mut cfg.theme, theme);
+    }
+    if let Some(ui) = raw.ui {
+        if let Some(ln) = ui.line_numbers {
+            cfg.ui.line_numbers = ln;
+        }
     }
 
     Ok(cfg)

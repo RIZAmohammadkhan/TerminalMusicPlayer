@@ -34,7 +34,7 @@ pub(crate) struct Player {
     pub(crate) selected: usize,
 
     // Playback order (either sequential or shuffled). Values are indices into `tracks`.
-    play_order: Vec<usize>,
+    pub(crate) play_order: Vec<usize>,
     play_pos: usize,
     pub(crate) shuffle: bool,
 
@@ -118,10 +118,15 @@ impl Player {
     pub(crate) fn set_favorites_view(&mut self, show_favorites: bool) {
         self.show_favorites = show_favorites;
         self.rebuild_play_order();
-        if self.show_favorites
-            && !self.play_order.is_empty()
-            && !self.play_order.contains(&self.selected)
-        {
+
+        // If the favorites view is empty, there's nothing to select.
+        if self.play_order.is_empty() {
+            return;
+        }
+
+        // If the currently selected track isn't in the active view,
+        // jump the selection to the first track in the view.
+        if !self.play_order.contains(&self.selected) {
             self.selected = self.play_order[0];
         }
     }
@@ -159,11 +164,13 @@ impl Player {
                 self.play_order = fav_indices.clone();
             }
 
+            // If the currently playing track isn't in the favorites view,
+            // set play_pos to the end so auto-advance correctly loops to index 0.
             self.play_pos = self
                 .play_order
                 .iter()
                 .position(|&i| i == self.current)
-                .unwrap_or(0);
+                .unwrap_or(self.play_order.len().saturating_sub(1));
         } else {
             if self.shuffle {
                 self.play_order = make_shuffled_order(self.tracks.len(), self.current);
@@ -196,6 +203,10 @@ impl Player {
 
     pub(crate) fn play_selected(&mut self) -> Result<()> {
         if !self.has_tracks() {
+            return Ok(());
+        }
+        // Prevent playing if in favorites view but no favorites exist.
+        if self.show_favorites && self.play_order.is_empty() {
             return Ok(());
         }
         self.audio_ctl.clear_next_source();
@@ -412,12 +423,9 @@ impl Player {
                 .iter()
                 .position(|&i| i == self.selected)
                 .unwrap_or(0);
-            let next_pos = if current_pos == 0 {
-                self.play_order.len() - 1
-            } else {
-                current_pos - 1
-            };
-            self.selected = self.play_order[next_pos];
+            if current_pos > 0 {
+                self.selected = self.play_order[current_pos - 1];
+            }
         } else {
             if self.selected > 0 {
                 self.selected -= 1;
@@ -435,8 +443,9 @@ impl Player {
                 .iter()
                 .position(|&i| i == self.selected)
                 .unwrap_or(0);
-            let next_pos = (current_pos + 1) % self.play_order.len();
-            self.selected = self.play_order[next_pos];
+            if current_pos + 1 < self.play_order.len() {
+                self.selected = self.play_order[current_pos + 1];
+            }
         } else {
             if self.selected + 1 < self.tracks.len() {
                 self.selected += 1;
