@@ -6,7 +6,7 @@ pkgdesc="A beautiful, keyboard-driven terminal music player for Linux (Binary)."
 arch=('x86_64')
 url="https://github.com/RIZAmohammadkhan/TerminalMusicPlayer"
 license=('MIT')
-depends=('alsa-lib' 'gcc-libs' 'glibc' 'yt-dlp')
+depends=('alsa-lib' 'gcc-libs' 'glibc')
 options=('!strip' '!debug')
 
 # Pointing to your .tar.xz binary release

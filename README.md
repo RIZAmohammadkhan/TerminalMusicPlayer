@@ -15,7 +15,7 @@
 
 ---
 
-**Trix** is a lightweight, high-performance music player built with Rust. It is designed for Linux users who prefer the terminal, offering a clean TUI (Terminal User Interface), robust vim-like keyboard navigation, gapless playback, synced lyrics, favorites, YouTube downloads, and full MPRIS2 integration — all with a minimal resource footprint.
+**Trix** is a lightweight, high-performance music player built with Rust. It is designed for Linux users who prefer the terminal, offering a clean TUI (Terminal User Interface), robust vim-like keyboard navigation, gapless playback, synced lyrics, favorites, and full MPRIS2 integration — all with a minimal resource footprint.
 
 ## 🎬 Demo
 
@@ -54,11 +54,6 @@ MP3, FLAC, WAV, OGG, M4A, AAC — decoded via `symphonia` with a `rodio` fallbac
 
 ### Now Playing Metadata
 * Reads **title, artist, and album** tags from your files and displays them in the Now panel, along with the track index.
-
-### YouTube Downloads
-* Download audio directly from YouTube from inside the player (`y`), using `yt-dlp`.
-* Prefers native **m4a** (no transcode) with embedded metadata, downloaded straight into your library.
-* The library refreshes automatically when a download completes. Requires `yt-dlp` on your PATH.
 
 ### MPRIS2 (D-Bus) Integration
 * Exposes an `org.mpris.MediaPlayer2.trix` D-Bus server, so external controllers just work:
@@ -109,7 +104,7 @@ sudo mv trix /usr/local/bin/
 ```
 
 ### One-line Install (curl)
-Installs the latest `x86_64-unknown-linux-gnu` release into `~/.local/bin` (or `/usr/local/bin` if run as root), and installs `yt-dlp` automatically if it's missing.
+Installs the latest `x86_64-unknown-linux-gnu` release into `~/.local/bin` (or `/usr/local/bin` if run as root).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/RIZAmohammadkhan/TerminalMusicPlayer/main/install.sh | sh
@@ -158,7 +153,7 @@ The TUI is split into a few live panels:
 | :--- | :--- |
 | **Title bar** | Playback state, volume (and backend), loop/shuffle/favorites-view indicators, volume-mode hint |
 | **Library / Favorites** | Your track list (`▶` marks the current track, `♥` marks favorites, `»` highlights selection) |
-| **Search / Move / YouTube box** | The active input mode or a hint to press `S` |
+| **Search / Move box** | The active input mode or a hint to press `S` |
 | **Now** | Track, artist, album, and index of the current song |
 | **Progress** | A fill bar with the current/total time label |
 | **Lyrics** | Previous, current, and next synced lyric line (or a hint if no `.lrc` file exists) |
@@ -206,7 +201,6 @@ Trix is designed to be used entirely without a mouse.
 | :--- | :--- |
 | `S` | **Search** mode — type to filter, `Enter` to play, `Esc` to cancel, `Backspace` to delete |
 | `m` | **Move** to timestamp — type `1:30` or `01:02:03`, `Enter` to jump, `Esc` to cancel |
-| `y` | **YouTube download** — paste a URL, `Enter` to download, `Esc` to cancel |
 | `v` | **Volume mode** — `↑`/`↓` (or `k`/`j`) to adjust, `v`/`Esc` to exit |
 
 ### Utility
@@ -284,12 +278,6 @@ playerctl status   # Playing / Paused / Stopped
 
 This also means your desktop's media-key bindings, KDE Connect, or GNOME sound indicator can control Trix without any extra setup.
 
-## 🎵 YouTube Downloads
-
-Press `y`, paste a URL, and press `Enter`. Trix will use `yt-dlp` to download the best available m4a audio directly into your library directory (with metadata embedded), then automatically refresh the library so the new track appears.
-
-Requires [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) to be installed and on your `PATH`. The one-line installer and the AUR package install it for you.
-
 ## 🔧 Dependencies
 
 To build or run Trix, you need ALSA development libraries installed on your system.
@@ -297,10 +285,6 @@ To build or run Trix, you need ALSA development libraries installed on your syst
 * **Debian/Ubuntu:** `sudo apt install libasound2-dev`
 * **Fedora:** `sudo dnf install alsa-lib-devel`
 * **Arch:** `sudo pacman -S alsa-lib`
-
-Optional runtime dependency for the YouTube feature:
-
-* **yt-dlp** — `pipx install yt-dlp` or see the [official install guide](https://github.com/yt-dlp/yt-dlp#installation)
 
 ## 🏗️ Building from Source
 

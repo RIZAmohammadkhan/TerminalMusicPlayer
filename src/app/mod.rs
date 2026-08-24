@@ -73,7 +73,7 @@ pub(crate) fn run() -> Result<()> {
     }
 
     let tracks = discover_tracks(&library_path)?;
-    let mut player = Player::new(tracks, args.index, audio, library_path.clone())?;
+    let mut player = Player::new(tracks, args.index, audio)?;
 
     // MPRIS: expose play/pause/stop via D-Bus so external controllers work.
     let mpris_state = MprisState::new();
@@ -142,21 +142,6 @@ pub(crate) fn run() -> Result<()> {
                 let _ = player.handle_auto_advance();
             } else if player.is_track_finished() {
                 let _ = player.next_track();
-            }
-        }
-
-        // Refresh library when a YouTube download completes, then close the menu after 1s.
-        {
-            use crate::ui::YtDlStatus;
-            let mut status = ui.youtube_dl_status.lock().unwrap();
-            if let YtDlStatus::Done(_, finished_at) = &*status {
-                if finished_at.elapsed() >= Duration::from_secs(1) {
-                    *status = YtDlStatus::Idle;
-                    drop(status);
-                    player.refresh_tracks();
-                    ui.youtube_dl_mode = false;
-                    ui.youtube_dl_url.clear();
-                }
             }
         }
 
